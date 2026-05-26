@@ -1,8 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { listen } from '@tauri-apps/api/event';
-import { invoke } from '@tauri-apps/api/core';
+import { emit, listen } from '@tauri-apps/api/event';
 import { Loader2, RefreshCw, X } from 'lucide-react';
 
 interface LiveNotes {
@@ -48,19 +47,13 @@ export function LiveNotesPanel() {
   }, []);
 
   async function refreshNow() {
-    // Ask the main window to fire a tick out-of-band.
-    await invoke('plugin:event|emit', {
-      event: 'live-notes-refresh-request',
-      payload: null,
-    }).catch(() => {});
+    // Ask the main window's useLiveNotes hook to fire a tick out-of-band.
+    await emit('live-notes-refresh-request').catch(() => {});
   }
 
   async function pauseForMeeting() {
     // Tell the main window to disable live notes for the current meeting.
-    await invoke('plugin:event|emit', {
-      event: 'live-notes-pause-request',
-      payload: null,
-    }).catch(() => {});
+    await emit('live-notes-pause-request').catch(() => {});
   }
 
   return (

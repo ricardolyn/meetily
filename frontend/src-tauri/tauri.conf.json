@@ -55,7 +55,8 @@
                     "identifier": "main",
                     "description": "Main window capability with file system and media access",
                     "windows": [
-                        "main"
+                        "main",
+                        "live-notes"
                     ],
                     "permissions": [
                         "fs:default",
