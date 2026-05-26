@@ -77,4 +77,4 @@ experiments/
 target/
 
 frontend/src-tauri/binaries/
-Cargo.lock
+# Cargo.lock is committed for the application binary (deterministic builds)

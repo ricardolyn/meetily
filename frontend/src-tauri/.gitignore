@@ -3,5 +3,5 @@
 /target/
 /gen/schemas
 
-Cargo.lock
+# Cargo.lock is committed for the application binary (deterministic builds)
 Cargo.toml.orig
