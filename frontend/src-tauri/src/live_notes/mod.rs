@@ -6,14 +6,15 @@ use chrono::{DateTime, Utc};
 use log::{error as log_error, info as log_info, warn as log_warn};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Manager as _, Runtime};
 use tokio::time::{timeout, Duration};
 
-use crate::state::AppState;
 use crate::summary::llm_client::{generate_summary, LLMProvider};
 
 /// Hard cap on a single LLM call. Prevents a stuck local model from
-/// queuing requests forever.
+/// queuing requests forever. Wraps the entire `generate_summary` future,
+/// so this also dominates the BuiltInAI provider's internal 15-minute
+/// timeout — the outer drop fires first.
 const LLM_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,7 +39,6 @@ pub struct LiveNotesModelConfig {
 #[tauri::command]
 pub async fn api_generate_live_notes<R: Runtime>(
     app: AppHandle<R>,
-    _state: tauri::State<'_, AppState>,
     meeting_id: String,
     recent_transcripts: String,
     previous_notes: Option<LiveNotes>,
@@ -102,6 +102,7 @@ fn parse_provider(name: &str) -> Result<LLMProvider, String> {
         "groq" => Ok(LLMProvider::Groq),
         "openrouter" => Ok(LLMProvider::OpenRouter),
         "builtin" | "builtinai" | "builtin_ai" => Ok(LLMProvider::BuiltInAI),
+        "custom-openai" | "customopenai" | "custom_openai" => Ok(LLMProvider::CustomOpenAI),
         other => Err(format!("Unsupported provider for live notes: {}", other)),
     }
 }
@@ -115,7 +116,7 @@ const SYSTEM_PROMPT: &str =
      For \"asked_of_you\", include only questions or asks directed at the user \
      that have not yet been answered. \
      For \"action_items\", carry forward and de-duplicate items from the \
-     previous notes below, and add new ones. Each item must be 12 words or fewer.";
+     previous notes provided, and add new ones. Each item must be 12 words or fewer.";
 
 fn build_user_prompt(recent_transcripts: &str, previous: Option<&LiveNotes>) -> String {
     let previous_json = match previous {
