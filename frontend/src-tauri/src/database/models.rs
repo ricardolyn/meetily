@@ -45,6 +45,9 @@ pub struct Transcript {
     pub audio_start_time: Option<f64>,
     pub audio_end_time: Option<f64>,
     pub duration: Option<f64>,
+    /// Channel-based speaker attribution: "me" (mic) / "others" (system).
+    /// Column added by migration 20251110000001_add_speaker_field.sql.
+    pub speaker: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]

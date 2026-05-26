@@ -25,21 +25,19 @@ const POLL_INTERVAL_SECS: u64 = 5;
 /// quit). 2 samples × 5 s = ≥5 s of consistent presence.
 const DEBOUNCE_SAMPLES: u8 = 2;
 
+// All-lowercase needle list; scan_for_call_app lowercases the haystack.
 #[cfg(target_os = "macos")]
 const KNOWN_CALL_APPS: &[&str] = &[
     "zoom.us",
-    "Microsoft Teams",
-    "Microsoft Teams Helper",
-    "MSTeams",
-    "Webex",
-    "WebEx",
-    "Cisco Webex Meetings",
-    "Discord",
-    "Discord Helper",
-    "FaceTime",
-    "Skype",
-    "GoToMeeting",
-    "BlueJeans",
+    "microsoft teams",
+    "msteams",
+    "webex",
+    "cisco webex",
+    "discord",
+    "facetime",
+    "skype",
+    "gotomeeting",
+    "bluejeans",
 ];
 
 /// Track whether the reminder has already fired for the currently-detected
@@ -108,8 +106,9 @@ fn scan_for_call_app() -> bool {
             if trimmed.is_empty() {
                 continue;
             }
+            let lower = trimmed.to_lowercase();
             for app in KNOWN_CALL_APPS {
-                if trimmed.contains(app) {
+                if lower.contains(app) {
                     return true;
                 }
             }

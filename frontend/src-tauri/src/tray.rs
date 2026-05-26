@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tauri::{
     Emitter,
     menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder},
@@ -18,6 +18,22 @@ static CALL_DETECTED: AtomicBool = AtomicBool::new(false);
 /// `update_tray_menu()` to repaint.
 pub fn set_call_detected(detected: bool) {
     CALL_DETECTED.store(detected, Ordering::SeqCst);
+}
+
+/// Monotonically increasing request id for menu updates. Every menu-update
+/// request bumps this and captures the new value; after the async build_menu
+/// finishes, the task installs the menu only if its captured value still
+/// equals MENU_GEN. This prevents two parallel updates (e.g. user clicks
+/// Pause then Stop rapidly) from installing menus out of order — the older
+/// task's result is discarded once a newer request has bumped the counter.
+static MENU_GEN: AtomicU64 = AtomicU64::new(0);
+
+fn next_menu_gen() -> u64 {
+    MENU_GEN.fetch_add(1, Ordering::SeqCst).wrapping_add(1)
+}
+
+fn current_menu_gen() -> u64 {
+    MENU_GEN.load(Ordering::SeqCst)
 }
 
 #[derive(Debug, Clone)]
@@ -321,11 +337,22 @@ pub fn update_tray_menu<R: Runtime>(app: &AppHandle<R>) {
 pub fn set_tray_state<R: Runtime>(app: &AppHandle<R>, state: RecordingState) {
     log::info!("Tray: Setting intermediate state: {:?}", state);
     // build_menu is async because it queries the DB for the project list when
-    // showing the "Start Recording" submenu. Spawn a task to do it.
+    // showing the "Start Recording" submenu. Spawn a task to do it, then
+    // check the generation counter before actually installing the menu so a
+    // slow build can't overwrite a newer update.
     let app_clone = app.clone();
+    let gen = next_menu_gen();
     tauri::async_runtime::spawn(async move {
         match build_menu(&app_clone, state, true).await {
             Ok(menu) => {
+                if current_menu_gen() != gen {
+                    log::debug!(
+                        "Tray: discarding stale intermediate-state menu (gen {} != {})",
+                        gen,
+                        current_menu_gen()
+                    );
+                    return;
+                }
                 if let Some(tray) = app_clone.tray_by_id("main-tray") {
                     let _ = tray.set_menu(Some(menu));
                 } else {
@@ -395,17 +422,25 @@ async fn check_can_record<R: Runtime>(app: &AppHandle<R>) -> bool {
 
 pub async fn update_tray_menu_async<R: Runtime>(app: &AppHandle<R>) {
     log::info!("Tray: update_tray_menu_async called");
-    // Get the current recording state
     let recording_state = get_current_recording_state().await;
-    log::info!("Tray: Current recording state: {:?}", recording_state);
-
-    // Determine if recording should be allowed
-    // Only block recording during incomplete onboarding when no transcription model is ready
     let can_record = check_can_record(app).await;
-    log::info!("Tray: can_record: {}", can_record);
+    log::info!(
+        "Tray: state={:?} can_record={} — building menu",
+        recording_state, can_record
+    );
 
+    // Reserve a generation slot so a later set_tray_state can pre-empt this.
+    let gen = next_menu_gen();
     match build_menu(app, recording_state, can_record).await {
         Ok(menu) => {
+            if current_menu_gen() != gen {
+                log::debug!(
+                    "Tray: discarding stale full menu update (gen {} != {})",
+                    gen,
+                    current_menu_gen()
+                );
+                return;
+            }
             if let Some(tray) = app.tray_by_id("main-tray") {
                 let result = tray.set_menu(Some(menu));
                 log::info!("Tray: Menu update result: {:?}", result);
