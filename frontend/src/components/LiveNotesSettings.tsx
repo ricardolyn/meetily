@@ -22,6 +22,7 @@ const PROVIDER_OPTIONS = [
   { value: 'openai', label: 'OpenAI' },
   { value: 'groq', label: 'Groq' },
   { value: 'openrouter', label: 'OpenRouter' },
+  { value: 'builtin', label: 'Built-in AI (local)' },
 ] as const;
 
 export function LiveNotesSettings() {
@@ -33,11 +34,15 @@ export function LiveNotesSettings() {
 
   async function update(patch: Partial<LiveNotesSettings>) {
     if (!settings) return;
+    const prev = settings;
     const next = { ...settings, ...patch };
     setSettings(next);
     try {
       await liveNotesService.setSettings(next);
     } catch (e) {
+      // Roll back the optimistic UI update so the on-screen value matches
+      // what's actually on disk.
+      setSettings(prev);
       toast.error(e instanceof Error ? e.message : 'Failed to save settings');
     }
   }

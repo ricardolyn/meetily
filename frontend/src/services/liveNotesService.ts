@@ -41,12 +41,16 @@ const DEFAULT_SETTINGS: LiveNotesSettings = {
   model: null,
 };
 
-let cachedStore: Store | null = null;
-async function getStore(): Promise<Store> {
-  if (!cachedStore) {
-    cachedStore = await load(STORE_FILE, { autoSave: true });
+// Promise singleton so concurrent callers (React Strict Mode double-mount,
+// multiple settings components) all reuse the same load() call. The
+// `defaults: {}` is required by the plugin-store type definition even
+// though we hold defaults ourselves at the application layer.
+let storePromise: Promise<Store> | null = null;
+function getStore(): Promise<Store> {
+  if (storePromise === null) {
+    storePromise = load(STORE_FILE, { autoSave: true, defaults: {} });
   }
-  return cachedStore;
+  return storePromise;
 }
 
 export const liveNotesService = {
