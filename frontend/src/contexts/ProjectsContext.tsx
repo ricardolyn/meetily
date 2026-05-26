@@ -1,6 +1,7 @@
 'use client';
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { projectsService } from '@/services/projectsService';
 import type { Project } from '@/types';
 
@@ -38,6 +39,14 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       setProjects(list);
       // If the currently selected project no longer exists, clear it.
       setSelectedProject(prev => (prev && !list.some(p => p.id === prev.id) ? null : prev));
+      // Tray "Start Recording" submenu is built from the project list, so
+      // keep it in sync after any CRUD operation.
+      try {
+        await invoke('refresh_tray_menu');
+      } catch (trayErr) {
+        // Non-fatal — tray will be stale until next state change but the UI works.
+        console.warn('Failed to refresh tray menu:', trayErr);
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error('Failed to load projects:', msg);

@@ -38,6 +38,7 @@ pub(crate) use perf_trace;
 pub mod analytics;
 pub mod api;
 pub mod audio;
+pub mod call_detector;
 pub mod config;
 pub mod console_utils;
 pub mod database;
@@ -419,6 +420,9 @@ pub fn run() {
                 log::error!("Failed to create system tray: {}", e);
             }
 
+            // Start background call-detection (macOS-only behaviour; stub on other OS)
+            call_detector::start_call_detector(_app.handle().clone());
+
             // Initialize notification system with proper defaults
             log::info!("Initializing notification system...");
             let app_for_notif = _app.handle().clone();
@@ -638,6 +642,7 @@ pub fn run() {
             api::api_delete_project,
             api::api_assign_meeting_to_project,
             api::pick_project_folder,
+            tray::refresh_tray_menu,
             api::open_meeting_folder,
             api::test_backend_connection,
             api::debug_backend_connection,

@@ -1,9 +1,24 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{
     Emitter,
-    menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem},
+    menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder},
     tray::TrayIconBuilder,
     AppHandle, Manager, Runtime,
 };
+
+/// Menu-item id prefix used for "Start Recording in <project name>" entries
+/// inside the tray submenu. The remainder of the id is the project_id.
+const START_PROJECT_PREFIX: &str = "start_project:";
+
+/// Shared flag set by the call-detector module. When true and we're in the
+/// `Stopped` state, the tray "Start Recording" entry is prefixed with 📞.
+static CALL_DETECTED: AtomicBool = AtomicBool::new(false);
+
+/// Toggle the call-detected flag. Caller should follow up with
+/// `update_tray_menu()` to repaint.
+pub fn set_call_detected(detected: bool) {
+    CALL_DETECTED.store(detected, Ordering::SeqCst);
+}
 
 #[derive(Debug, Clone)]
 pub enum RecordingState {
@@ -17,9 +32,17 @@ pub enum RecordingState {
 }
 
 pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
-    // Start with default menu, will update with actual state after initialization
-    // Pass can_record=true initially, will be updated by update_tray_menu immediately
-    let menu = build_menu(app, RecordingState::Stopped, true)?;
+    // Synchronous placeholder menu — build_menu() is async (needs the DB to
+    // populate the project submenu) so we install a stub here and let
+    // update_tray_menu() replace it once AppState is ready.
+    let menu = MenuBuilder::new(app)
+        .item(&MenuItemBuilder::with_id("toggle_recording", "Start Recording").build(app)?)
+        .item(&PredefinedMenuItem::separator(app)?)
+        .item(&MenuItemBuilder::with_id("open_window", "Open Main Window").build(app)?)
+        .item(&MenuItemBuilder::with_id("settings", "Settings").build(app)?)
+        .item(&PredefinedMenuItem::separator(app)?)
+        .item(&MenuItemBuilder::with_id("quit", "Quit").build(app)?)
+        .build()?;
 
     TrayIconBuilder::with_id("main-tray")
         .menu(&menu)
@@ -28,7 +51,7 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
         .build(app)?;
 
-    // Update tray menu with actual recording state after creation
+    // Replace placeholder with the real (project-aware) menu once AppState is ready.
     update_tray_menu(app);
 
     Ok(())
@@ -36,7 +59,14 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
 fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, item_id: &str) {
     match item_id {
-        "toggle_recording" => toggle_recording_handler(app),
+        // Plain "Start Recording" (no project chosen) or explicit "No project" entry
+        // inside the Start submenu.
+        "toggle_recording" | "start_default" => toggle_recording_handler(app, None),
+        // "start_project:<project_id>" — start recording with the given project
+        s if s.starts_with(START_PROJECT_PREFIX) => {
+            let project_id = s[START_PROJECT_PREFIX.len()..].to_string();
+            toggle_recording_handler(app, Some(project_id));
+        }
         "pause_recording" => pause_recording_handler(app),
         "resume_recording" => resume_recording_handler(app),
         "stop_recording" => stop_recording_handler(app),
@@ -52,7 +82,7 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, item_id: &str) {
         _ => {}
     }
 }
-fn toggle_recording_handler<R: Runtime>(app: &AppHandle<R>) {
+fn toggle_recording_handler<R: Runtime>(app: &AppHandle<R>, project_id: Option<String>) {
     focus_main_window(app);
     let app_clone = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -105,13 +135,82 @@ fn toggle_recording_handler<R: Runtime>(app: &AppHandle<R>) {
             // Immediately show starting state
             set_tray_state(&app_clone, RecordingState::Starting);
 
-            log::info!("Emitting start recording event from tray");
+            // If a project was chosen from the submenu, look up its folder so the
+            // frontend can pass it straight to Rust without another round-trip.
+            let project_folder = if let Some(ref pid) = project_id {
+                load_project_folder(&app_clone, pid).await
+            } else {
+                None
+            };
+
+            log::info!(
+                "Emitting start recording event from tray (project_id={:?}, folder={:?})",
+                project_id,
+                project_folder
+            );
             if let Some(window) = app_clone.get_webview_window("main") {
-                let _ = window.eval("sessionStorage.setItem('autoStartRecording', 'true')"); // Set the flag to start recording automatically
+                let _ = window.eval("sessionStorage.setItem('autoStartRecording', 'true')");
+
+                // Pass project selection to frontend via sessionStorage. Frontend
+                // useRecordingStart reads + clears these on auto-start.
+                if let Some(pid) = &project_id {
+                    let pid_js = escape_js_string(pid);
+                    let _ = window.eval(&format!(
+                        "sessionStorage.setItem('autoStartProjectId', '{}')",
+                        pid_js
+                    ));
+                } else {
+                    let _ = window.eval("sessionStorage.removeItem('autoStartProjectId')");
+                }
+
+                if let Some(folder) = &project_folder {
+                    let folder_js = escape_js_string(folder);
+                    let _ = window.eval(&format!(
+                        "sessionStorage.setItem('autoStartProjectFolder', '{}')",
+                        folder_js
+                    ));
+                } else {
+                    let _ = window.eval("sessionStorage.removeItem('autoStartProjectFolder')");
+                }
+
                 let _ = window.eval("window.location.assign('/')");
             }
         }
     });
+}
+
+/// Escape a string for safe inclusion in a JS single-quoted literal.
+fn escape_js_string(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('\'', "\\'")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
+/// Load all projects from the local sqlite DB. Returns an empty vec if the
+/// AppState is not yet initialised (during early startup).
+async fn load_projects<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Vec<crate::database::models::ProjectModel> {
+    let Some(state) = app.try_state::<crate::state::AppState>() else {
+        return Vec::new();
+    };
+    let pool = state.db_manager.pool();
+    crate::database::repositories::projects::ProjectsRepository::list_projects(pool)
+        .await
+        .unwrap_or_default()
+}
+
+/// Look up a single project's folder_path by id.
+async fn load_project_folder<R: Runtime>(app: &AppHandle<R>, project_id: &str) -> Option<String> {
+    let state = app.try_state::<crate::state::AppState>()?;
+    let pool = state.db_manager.pool();
+    match crate::database::repositories::projects::ProjectsRepository::get_project(pool, project_id)
+        .await
+    {
+        Ok(Some(project)) => Some(project.folder_path),
+        _ => None,
+    }
 }
 
 fn pause_recording_handler<R: Runtime>(app: &AppHandle<R>) {
@@ -221,17 +320,21 @@ pub fn update_tray_menu<R: Runtime>(app: &AppHandle<R>) {
 
 pub fn set_tray_state<R: Runtime>(app: &AppHandle<R>, state: RecordingState) {
     log::info!("Tray: Setting intermediate state: {:?}", state);
-    // During recording state transitions, we assume recording is allowed (we're already recording)
-    if let Ok(menu) = build_menu(app, state, true) {
-        if let Some(tray) = app.tray_by_id("main-tray") {
-            let result = tray.set_menu(Some(menu));
-            log::info!("Tray: Intermediate state menu update result: {:?}", result);
-        } else {
-            log::warn!("Tray: Could not find tray with id 'main-tray'");
+    // build_menu is async because it queries the DB for the project list when
+    // showing the "Start Recording" submenu. Spawn a task to do it.
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn(async move {
+        match build_menu(&app_clone, state, true).await {
+            Ok(menu) => {
+                if let Some(tray) = app_clone.tray_by_id("main-tray") {
+                    let _ = tray.set_menu(Some(menu));
+                } else {
+                    log::warn!("Tray: Could not find tray with id 'main-tray'");
+                }
+            }
+            Err(e) => log::error!("Tray: Failed to build menu for intermediate state: {}", e),
         }
-    } else {
-        log::error!("Tray: Failed to build menu for intermediate state");
-    }
+    });
 }
 
 async fn get_current_recording_state() -> RecordingState {
@@ -301,19 +404,20 @@ pub async fn update_tray_menu_async<R: Runtime>(app: &AppHandle<R>) {
     let can_record = check_can_record(app).await;
     log::info!("Tray: can_record: {}", can_record);
 
-    if let Ok(menu) = build_menu(app, recording_state, can_record) {
-        if let Some(tray) = app.tray_by_id("main-tray") {
-            let result = tray.set_menu(Some(menu));
-            log::info!("Tray: Menu update result: {:?}", result);
-        } else {
-            log::warn!("Tray: Could not find tray with id 'main-tray'");
+    match build_menu(app, recording_state, can_record).await {
+        Ok(menu) => {
+            if let Some(tray) = app.tray_by_id("main-tray") {
+                let result = tray.set_menu(Some(menu));
+                log::info!("Tray: Menu update result: {:?}", result);
+            } else {
+                log::warn!("Tray: Could not find tray with id 'main-tray'");
+            }
         }
-    } else {
-        log::error!("Tray: Failed to build menu");
+        Err(e) => log::error!("Tray: Failed to build menu: {}", e),
     }
 }
 
-fn build_menu<R: Runtime>(
+async fn build_menu<R: Runtime>(
     app: &AppHandle<R>,
     state: RecordingState,
     can_record: bool, // True if recording is allowed (onboarding complete OR transcription model ready)
@@ -330,8 +434,33 @@ fn build_menu<R: Runtime>(
     } else {
         match state {
             RecordingState::Stopped => {
-                builder = builder
-                    .item(&MenuItemBuilder::with_id("toggle_recording", "Start Recording").build(app)?);
+                let call_detected = CALL_DETECTED.load(Ordering::SeqCst);
+                let label = if call_detected {
+                    "📞 Call detected — Start Recording"
+                } else {
+                    "Start Recording"
+                };
+
+                // If projects exist, show a submenu letting the user pick which
+                // one the recording belongs to. Otherwise a plain item.
+                let projects = load_projects(app).await;
+                if projects.is_empty() {
+                    builder = builder.item(
+                        &MenuItemBuilder::with_id("toggle_recording", label).build(app)?,
+                    );
+                } else {
+                    let mut sub = SubmenuBuilder::with_id(app, "start_submenu", label);
+                    sub = sub.item(
+                        &MenuItemBuilder::with_id("start_default", "No project (default folder)")
+                            .build(app)?,
+                    );
+                    sub = sub.separator();
+                    for p in &projects {
+                        let id = format!("{}{}", START_PROJECT_PREFIX, p.id);
+                        sub = sub.item(&MenuItemBuilder::with_id(&id, &p.name).build(app)?);
+                    }
+                    builder = builder.item(&sub.build()?);
+                }
             }
             RecordingState::Starting => {
                 builder = builder.item(
@@ -389,6 +518,14 @@ fn build_menu<R: Runtime>(
         .item(&PredefinedMenuItem::separator(app)?)
         .item(&MenuItemBuilder::with_id("quit", "Quit").build(app)?)
         .build()
+}
+
+/// Tauri command exposed to the frontend so that after project CRUD the tray
+/// "Start Recording" submenu picks up the change immediately.
+#[tauri::command]
+pub async fn refresh_tray_menu<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    update_tray_menu_async(&app).await;
+    Ok(())
 }
 
 fn focus_main_window<R: Runtime>(app: &AppHandle<R>) {

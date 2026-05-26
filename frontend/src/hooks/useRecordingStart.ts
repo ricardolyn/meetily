@@ -36,8 +36,39 @@ export function useRecordingStart(
   const { clearTranscripts, setMeetingTitle } = useTranscripts();
   const { setIsMeetingActive } = useSidebar();
   const { selectedDevices } = useConfig();
-  const { selectedProject } = useProjects();
+  const { selectedProject, projects, setSelectedProject } = useProjects();
   const { setStatus } = useRecordingState();
+
+  /**
+   * If the tray set "autoStartProjectId/Folder" before navigating here, use
+   * those values for this recording (overriding the in-window picker). Clears
+   * the sessionStorage keys after reading so the next recording falls back to
+   * the picker's selectedProject. Returns the project_folder string to pass to
+   * Rust start_recording.
+   */
+  const consumeAutoStartProjectOverride = useCallback((): string | null => {
+    if (typeof window === 'undefined') return selectedProject?.folder_path ?? null;
+    const overrideId = sessionStorage.getItem('autoStartProjectId');
+    const overrideFolder = sessionStorage.getItem('autoStartProjectFolder');
+    sessionStorage.removeItem('autoStartProjectId');
+    sessionStorage.removeItem('autoStartProjectFolder');
+
+    if (overrideId) {
+      // Sync the in-window picker chip so the UI matches what's about to record.
+      const matched = projects.find(p => p.id === overrideId);
+      if (matched) setSelectedProject(matched);
+      sessionStorage.setItem('last_recording_project_id', overrideId);
+      return overrideFolder || matched?.folder_path || null;
+    }
+
+    // No tray override; fall back to whatever the picker has selected.
+    if (selectedProject) {
+      sessionStorage.setItem('last_recording_project_id', selectedProject.id);
+      return selectedProject.folder_path;
+    }
+    sessionStorage.removeItem('last_recording_project_id');
+    return null;
+  }, [projects, selectedProject, setSelectedProject]);
 
   // Generate meeting title with timestamp
   const generateMeetingTitle = useCallback(() => {
@@ -118,19 +149,15 @@ export function useRecordingStart(
 
       // Start the actual backend recording
       console.log('Starting backend recording with meeting:', randomTitle);
-      // Stash the project association so the stop handler can pass it to
-      // storage when saving. Cleared on stop / on next start.
-      if (selectedProject) {
-        sessionStorage.setItem('last_recording_project_id', selectedProject.id);
-      } else {
-        sessionStorage.removeItem('last_recording_project_id');
-      }
+      // Picker selection OR tray-submenu override; both routed through
+      // consumeAutoStartProjectOverride which also stashes last_recording_project_id.
+      const projectFolder = consumeAutoStartProjectOverride();
 
       await recordingService.startRecordingWithDevices(
         selectedDevices?.micDevice || null,
         selectedDevices?.systemDevice || null,
         randomTitle,
-        selectedProject?.folder_path || null
+        projectFolder
       );
       console.log('Backend recording started successfully');
 
@@ -152,7 +179,7 @@ export function useRecordingStart(
       // Re-throw so RecordingControls can handle device-specific errors
       throw error;
     }
-  }, [generateMeetingTitle, setMeetingTitle, setIsRecording, clearTranscripts, setIsMeetingActive, checkParakeetReady, checkIfModelDownloading, selectedDevices, selectedProject, showModal, setStatus]);
+  }, [generateMeetingTitle, setMeetingTitle, setIsRecording, clearTranscripts, setIsMeetingActive, checkParakeetReady, checkIfModelDownloading, selectedDevices, consumeAutoStartProjectOverride, showModal, setStatus]);
 
   // Check for autoStartRecording flag and start recording automatically
   useEffect(() => {
@@ -195,18 +222,14 @@ export function useRecordingStart(
             // Set STARTING status before initiating backend recording
             setStatus(RecordingStatus.STARTING, 'Initializing recording...');
 
-            if (selectedProject) {
-              sessionStorage.setItem('last_recording_project_id', selectedProject.id);
-            } else {
-              sessionStorage.removeItem('last_recording_project_id');
-            }
+            const projectFolder = consumeAutoStartProjectOverride();
 
             console.log('Auto-starting backend recording with meeting:', generatedMeetingTitle);
             const result = await recordingService.startRecordingWithDevices(
               selectedDevices?.micDevice || null,
               selectedDevices?.systemDevice || null,
               generatedMeetingTitle,
-              selectedProject?.folder_path || null
+              projectFolder
             );
             console.log('Auto-start backend recording result:', result);
 
@@ -237,7 +260,7 @@ export function useRecordingStart(
     isRecording,
     isAutoStarting,
     selectedDevices,
-    selectedProject,
+    consumeAutoStartProjectOverride,
     generateMeetingTitle,
     setMeetingTitle,
     setIsRecording,
@@ -290,18 +313,14 @@ export function useRecordingStart(
         // Set STARTING status before initiating backend recording
         setStatus(RecordingStatus.STARTING, 'Initializing recording...');
 
-        if (selectedProject) {
-          sessionStorage.setItem('last_recording_project_id', selectedProject.id);
-        } else {
-          sessionStorage.removeItem('last_recording_project_id');
-        }
+        const projectFolder = consumeAutoStartProjectOverride();
 
         console.log('Starting backend recording with meeting:', generatedMeetingTitle);
         const result = await recordingService.startRecordingWithDevices(
           selectedDevices?.micDevice || null,
           selectedDevices?.systemDevice || null,
           generatedMeetingTitle,
-          selectedProject?.folder_path || null
+          projectFolder
         );
         console.log('Backend recording result:', result);
 
@@ -334,7 +353,7 @@ export function useRecordingStart(
     isRecording,
     isAutoStarting,
     selectedDevices,
-    selectedProject,
+    consumeAutoStartProjectOverride,
     generateMeetingTitle,
     setMeetingTitle,
     setIsRecording,

@@ -282,6 +282,19 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({ transcripts, isR
             className="mb-3"
           >
             <div className="flex items-start gap-2">
+              {/* Speaker attribution chip: mic = "Me", system audio = "Others" */}
+              {transcript.speaker && (
+                <span
+                  className={`text-[10px] font-medium uppercase tracking-wide mt-1 px-1.5 py-0.5 rounded flex-shrink-0 ${
+                    transcript.speaker === 'me'
+                      ? 'bg-blue-100 text-blue-700'
+                      : 'bg-amber-100 text-amber-700'
+                  }`}
+                  title={transcript.speaker === 'me' ? 'You (microphone)' : 'Other party (system audio)'}
+                >
+                  {transcript.speaker === 'me' ? 'Me' : 'Others'}
+                </span>
+              )}
               <Tooltip>
                 <TooltipTrigger>
                   <span className="text-xs text-gray-400 mt-1 flex-shrink-0 min-w-[50px]">
