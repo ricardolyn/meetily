@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core"
 import Analytics from "@/lib/analytics"
 import AnalyticsConsentSwitch from "./AnalyticsConsentSwitch"
 import { useConfig, NotificationSettings } from "@/contexts/ConfigContext"
+import { LiveNotesSettings } from "./LiveNotesSettings"
 
 export function PreferenceSettings() {
   const {
@@ -223,6 +224,11 @@ export function PreferenceSettings() {
       {/* Analytics Section */}
       <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
         <AnalyticsConsentSwitch />
+      </div>
+
+      {/* Live Notes Section */}
+      <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
+        <LiveNotesSettings />
       </div>
     </div>
   )
