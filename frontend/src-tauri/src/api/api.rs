@@ -8,13 +8,14 @@ use crate::{
     database::{
         models::MeetingModel,
         repositories::{
-            meeting::MeetingsRepository, setting::SettingsRepository,
-            transcript::TranscriptsRepository,
+            meeting::MeetingsRepository, projects::ProjectsRepository,
+            setting::SettingsRepository, transcript::TranscriptsRepository,
         },
     },
     state::AppState,
     summary::CustomOpenAIConfig,
 };
+use uuid::Uuid;
 
 // Hardcoded server URL
 const APP_SERVER_URL: &str = "http://localhost:5167";
@@ -122,6 +123,8 @@ pub struct MeetingDetails {
     pub title: String,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
     pub transcripts: Vec<MeetingTranscript>,
 }
 
@@ -148,6 +151,18 @@ pub struct MeetingMetadata {
     pub updated_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub folder_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Project {
+    pub id: String,
+    pub name: String,
+    pub folder_path: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub meeting_count: i64,
 }
 
 /// Paginated transcripts response with total count
@@ -828,6 +843,7 @@ pub async fn api_get_meeting_metadata<R: Runtime>(
                 created_at: meeting.created_at.0.to_rfc3339(),
                 updated_at: meeting.updated_at.0.to_rfc3339(),
                 folder_path: meeting.folder_path,
+                project_id: meeting.project_id,
             })
         }
         Ok(None) => {
@@ -933,13 +949,15 @@ pub async fn api_save_transcript<R: Runtime>(
     meeting_title: String,
     transcripts: Vec<serde_json::Value>,
     folder_path: Option<String>,
+    project_id: Option<String>,
     auth_token: Option<String>,
 ) -> Result<serde_json::Value, String> {
     log_info!(
-        "api_save_transcript called for meeting: {}, transcripts: {}, folder_path: {:?}, auth_token: {}",
+        "api_save_transcript called for meeting: {}, transcripts: {}, folder_path: {:?}, project_id: {:?}, auth_token: {}",
         meeting_title,
         transcripts.len(),
         folder_path,
+        project_id,
         auth_token.is_some()
     );
 
@@ -978,6 +996,7 @@ pub async fn api_save_transcript<R: Runtime>(
         &meeting_title,
         &transcripts_to_save,
         folder_path,
+        project_id,
     )
     .await
     {
@@ -1378,6 +1397,224 @@ pub async fn api_test_custom_openai_connection<R: Runtime>(
             } else {
                 Err(format!("Connection failed: {}", e))
             }
+        }
+    }
+}
+
+// ============================================================================
+// PROJECTS
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateProjectRequest {
+    pub name: String,
+    pub folder_path: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UpdateProjectRequest {
+    pub name: Option<String>,
+    pub folder_path: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AssignMeetingProjectRequest {
+    pub meeting_id: String,
+    pub project_id: Option<String>,
+}
+
+async fn project_with_count(
+    pool: &sqlx::SqlitePool,
+    model: crate::database::models::ProjectModel,
+) -> Project {
+    let count = ProjectsRepository::count_meetings(pool, &model.id)
+        .await
+        .unwrap_or(0);
+    Project {
+        id: model.id,
+        name: model.name,
+        folder_path: model.folder_path,
+        created_at: model.created_at.0.to_rfc3339(),
+        updated_at: model.updated_at.0.to_rfc3339(),
+        meeting_count: count,
+    }
+}
+
+#[tauri::command]
+pub async fn api_get_projects<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<Project>, String> {
+    log_info!("api_get_projects called");
+    let pool = state.db_manager.pool();
+
+    match ProjectsRepository::list_projects(pool).await {
+        Ok(models) => {
+            let mut projects = Vec::with_capacity(models.len());
+            for m in models {
+                projects.push(project_with_count(pool, m).await);
+            }
+            Ok(projects)
+        }
+        Err(e) => {
+            log_error!("Failed to list projects: {}", e);
+            Err(format!("Failed to list projects: {}", e))
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn api_get_project<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    project_id: String,
+) -> Result<Option<Project>, String> {
+    log_info!("api_get_project called for project_id: {}", project_id);
+    let pool = state.db_manager.pool();
+
+    match ProjectsRepository::get_project(pool, &project_id).await {
+        Ok(Some(m)) => Ok(Some(project_with_count(pool, m).await)),
+        Ok(None) => Ok(None),
+        Err(e) => {
+            log_error!("Failed to get project {}: {}", project_id, e);
+            Err(format!("Failed to get project: {}", e))
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn api_create_project<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    request: CreateProjectRequest,
+) -> Result<Project, String> {
+    log_info!(
+        "api_create_project called: name='{}', folder_path='{}'",
+        request.name,
+        request.folder_path
+    );
+    let pool = state.db_manager.pool();
+    let project_id = format!("project-{}", Uuid::new_v4());
+
+    match ProjectsRepository::create_project(pool, &project_id, &request.name, &request.folder_path)
+        .await
+    {
+        Ok(m) => Ok(project_with_count(pool, m).await),
+        Err(e) => {
+            let msg = e.to_string();
+            // SQLite UNIQUE constraint on name
+            if msg.contains("UNIQUE constraint failed") {
+                Err(format!(
+                    "A project named '{}' already exists",
+                    request.name.trim()
+                ))
+            } else {
+                log_error!("Failed to create project: {}", e);
+                Err(format!("Failed to create project: {}", e))
+            }
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn api_update_project<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    project_id: String,
+    request: UpdateProjectRequest,
+) -> Result<Project, String> {
+    log_info!(
+        "api_update_project called for {}: name={:?}, folder_path={:?}",
+        project_id,
+        request.name,
+        request.folder_path
+    );
+    let pool = state.db_manager.pool();
+
+    match ProjectsRepository::update_project(
+        pool,
+        &project_id,
+        request.name.as_deref(),
+        request.folder_path.as_deref(),
+    )
+    .await
+    {
+        Ok(Some(m)) => Ok(project_with_count(pool, m).await),
+        Ok(None) => Err(format!("Project not found: {}", project_id)),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("UNIQUE constraint failed") {
+                Err("A project with that name already exists".to_string())
+            } else {
+                log_error!("Failed to update project: {}", e);
+                Err(format!("Failed to update project: {}", e))
+            }
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn api_delete_project<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    project_id: String,
+) -> Result<serde_json::Value, String> {
+    log_info!("api_delete_project called for {}", project_id);
+    let pool = state.db_manager.pool();
+
+    match ProjectsRepository::delete_project(pool, &project_id).await {
+        Ok(true) => Ok(serde_json::json!({"status": "success"})),
+        Ok(false) => Err(format!("Project not found: {}", project_id)),
+        Err(e) => {
+            log_error!("Failed to delete project: {}", e);
+            Err(format!("Failed to delete project: {}", e))
+        }
+    }
+}
+
+/// Open a native directory picker and return the selected absolute path.
+/// Used by the Projects settings UI to pick where a project's recordings live.
+#[tauri::command]
+pub async fn pick_project_folder<R: Runtime>(app: AppHandle<R>) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    log_info!("Opening directory picker for project folder");
+    let folder = app.dialog().file().blocking_pick_folder();
+
+    match folder {
+        Some(path) => Ok(Some(path.to_string())),
+        None => {
+            log_info!("User cancelled directory selection");
+            Ok(None)
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn api_assign_meeting_to_project<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    request: AssignMeetingProjectRequest,
+) -> Result<serde_json::Value, String> {
+    log_info!(
+        "api_assign_meeting_to_project called: meeting={}, project={:?}",
+        request.meeting_id,
+        request.project_id
+    );
+    let pool = state.db_manager.pool();
+
+    match MeetingsRepository::assign_meeting_to_project(
+        pool,
+        &request.meeting_id,
+        request.project_id.as_deref(),
+    )
+    .await
+    {
+        Ok(true) => Ok(serde_json::json!({"status": "success"})),
+        Ok(false) => Err(format!("Meeting not found: {}", request.meeting_id)),
+        Err(e) => {
+            log_error!("Failed to assign meeting to project: {}", e);
+            Err(format!("Failed to assign meeting to project: {}", e))
         }
     }
 }

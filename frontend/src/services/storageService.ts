@@ -12,6 +12,7 @@ export interface SaveMeetingRequest {
   meetingTitle: string;
   transcripts: Transcript[];
   folderPath: string | null;
+  projectId?: string | null;
 }
 
 export interface SaveMeetingResponse {
@@ -34,17 +35,20 @@ export class StorageService {
    * @param meetingTitle - Title of the meeting
    * @param transcripts - Array of transcript segments
    * @param folderPath - Optional folder path for audio file
+   * @param projectId - Optional project ID to associate the meeting with
    * @returns Promise with { meeting_id: string }
    */
   async saveMeeting(
     meetingTitle: string,
     transcripts: Transcript[],
-    folderPath: string | null
+    folderPath: string | null,
+    projectId: string | null = null
   ): Promise<SaveMeetingResponse> {
     return invoke<SaveMeetingResponse>('api_save_transcript', {
       meetingTitle,
       transcripts,
       folderPath,
+      projectId,
     });
   }
 

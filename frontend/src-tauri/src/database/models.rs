@@ -9,6 +9,16 @@ pub struct MeetingModel {
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
     pub folder_path: Option<String>,
+    pub project_id: Option<String>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ProjectModel {
+    pub id: String,
+    pub name: String,
+    pub folder_path: String,
+    pub created_at: DateTimeUtc,
+    pub updated_at: DateTimeUtc,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]

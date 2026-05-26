@@ -51,6 +51,9 @@ pub struct RecordingSaver {
     incremental_saver: Option<Arc<AsyncMutex<IncrementalAudioSaver>>>,
     meeting_folder: Option<PathBuf>,
     meeting_name: Option<String>,
+    /// Optional project root folder. When set, the meeting folder is created
+    /// inside this directory instead of the default recordings folder.
+    project_folder: Option<PathBuf>,
     metadata: Option<MeetingMetadata>,
     transcript_segments: Arc<Mutex<Vec<TranscriptSegment>>>,
     chunk_receiver: Option<mpsc::UnboundedReceiver<AudioChunk>>,
@@ -63,6 +66,7 @@ impl RecordingSaver {
             incremental_saver: None,
             meeting_folder: None,
             meeting_name: None,
+            project_folder: None,
             metadata: None,
             transcript_segments: Arc::new(Mutex::new(Vec::new())),
             chunk_receiver: None,
@@ -73,6 +77,13 @@ impl RecordingSaver {
     /// Set the meeting name for this recording session
     pub fn set_meeting_name(&mut self, name: Option<String>) {
         self.meeting_name = name;
+    }
+
+    /// Set the project root folder for this recording session.
+    /// If set, the per-meeting folder will be created inside this directory
+    /// instead of the global default recordings folder.
+    pub fn set_project_folder(&mut self, folder: Option<PathBuf>) {
+        self.project_folder = folder;
     }
 
     /// Set device information in metadata
@@ -228,8 +239,16 @@ impl RecordingSaver {
     /// * `meeting_name` - Name of the meeting
     /// * `create_checkpoints` - Whether to create .checkpoints/ directory and IncrementalAudioSaver
     fn initialize_meeting_folder(&mut self, meeting_name: &str, create_checkpoints: bool) -> Result<()> {
-        // Load preferences to get base recordings folder
-        let base_folder = super::recording_preferences::get_default_recordings_folder();
+        // Use the project folder if one was set, otherwise fall back to the
+        // default recordings folder. The chosen folder is the parent that will
+        // contain the per-meeting subdirectory.
+        let base_folder = match self.project_folder.as_ref() {
+            Some(p) => {
+                info!("Using project folder as recording base: {}", p.display());
+                p.clone()
+            }
+            None => super::recording_preferences::get_default_recordings_folder(),
+        };
 
         // Create meeting folder structure (with or without .checkpoints/ subdirectory)
         let meeting_folder = create_meeting_folder(&base_folder, meeting_name, create_checkpoints)?;

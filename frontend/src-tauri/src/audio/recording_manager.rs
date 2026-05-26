@@ -434,6 +434,12 @@ impl RecordingManager {
         self.recording_saver.set_meeting_name(name);
     }
 
+    /// Set the project root folder for this recording session.
+    /// When None, the global default recordings folder is used.
+    pub fn set_project_folder(&mut self, folder: Option<std::path::PathBuf>) {
+        self.recording_saver.set_project_folder(folder);
+    }
+
     /// Add a structured transcript segment to be saved later
     pub fn add_transcript_segment(&self, segment: super::recording_saver::TranscriptSegment) {
         self.recording_saver.add_transcript_segment(segment);

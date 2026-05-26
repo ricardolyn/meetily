@@ -7,6 +7,7 @@ import { EmptyStateSummary } from '@/components/EmptyStateSummary';
 import { ModelConfig } from '@/components/ModelSettingsModal';
 import { SummaryGeneratorButtonGroup } from './SummaryGeneratorButtonGroup';
 import { SummaryUpdaterButtonGroup } from './SummaryUpdaterButtonGroup';
+import { MeetingProjectChip } from './MeetingProjectChip';
 import Analytics from '@/lib/analytics';
 import { RefObject } from 'react';
 
@@ -15,6 +16,7 @@ interface SummaryPanelProps {
     id: string;
     title: string;
     created_at: string;
+    project_id?: string | null;
   };
   meetingTitle: string;
   onTitleChange: (title: string) => void;
@@ -98,6 +100,13 @@ export function SummaryPanel({
           onFinishEditing={onFinishEditTitle}
           onChange={onTitleChange}
         /> */}
+
+        <div className="flex items-center mb-2">
+          <MeetingProjectChip
+            meetingId={meeting.id}
+            currentProjectId={meeting.project_id ?? null}
+          />
+        </div>
 
         {/* Button groups - only show when summary exists */}
         {aiSummary && !isSummaryLoading && (

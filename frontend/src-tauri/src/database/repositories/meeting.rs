@@ -62,7 +62,7 @@ impl MeetingsRepository {
 
         // Get meeting details
         let meeting: Option<MeetingModel> =
-            sqlx::query_as("SELECT id, title, created_at, updated_at, folder_path FROM meetings WHERE id = ?")
+            sqlx::query_as("SELECT id, title, created_at, updated_at, folder_path, project_id FROM meetings WHERE id = ?")
                 .bind(meeting_id)
                 .fetch_optional(&mut *transaction)
                 .await?;
@@ -100,6 +100,7 @@ impl MeetingsRepository {
                 title: meeting.title,
                 created_at: meeting.created_at.0.to_rfc3339(),
                 updated_at: meeting.updated_at.0.to_rfc3339(),
+                project_id: meeting.project_id,
                 transcripts: meeting_transcripts,
             }))
         } else {
@@ -120,7 +121,7 @@ impl MeetingsRepository {
         }
 
         let meeting: Option<MeetingModel> =
-            sqlx::query_as("SELECT id, title, created_at, updated_at, folder_path FROM meetings WHERE id = ?")
+            sqlx::query_as("SELECT id, title, created_at, updated_at, folder_path, project_id FROM meetings WHERE id = ?")
                 .bind(meeting_id)
                 .fetch_optional(pool)
                 .await?;
@@ -194,6 +195,29 @@ impl MeetingsRepository {
         }
         transaction.commit().await?;
         Ok(true)
+    }
+
+    pub async fn assign_meeting_to_project(
+        pool: &SqlitePool,
+        meeting_id: &str,
+        project_id: Option<&str>,
+    ) -> Result<bool, SqlxError> {
+        if meeting_id.trim().is_empty() {
+            return Err(SqlxError::Protocol(
+                "meeting_id cannot be empty".to_string(),
+            ));
+        }
+
+        let now = Utc::now().naive_utc();
+        let rows_affected =
+            sqlx::query("UPDATE meetings SET project_id = ?, updated_at = ? WHERE id = ?")
+                .bind(project_id)
+                .bind(now)
+                .bind(meeting_id)
+                .execute(pool)
+                .await?;
+
+        Ok(rows_affected.rows_affected() > 0)
     }
 
     pub async fn update_meeting_name(

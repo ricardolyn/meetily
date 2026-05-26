@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useTranscripts } from '@/contexts/TranscriptContext';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { useConfig } from '@/contexts/ConfigContext';
+import { useProjects } from '@/contexts/ProjectsContext';
 import { useRecordingState, RecordingStatus } from '@/contexts/RecordingStateContext';
 import { recordingService } from '@/services/recordingService';
 import Analytics from '@/lib/analytics';
@@ -35,6 +36,7 @@ export function useRecordingStart(
   const { clearTranscripts, setMeetingTitle } = useTranscripts();
   const { setIsMeetingActive } = useSidebar();
   const { selectedDevices } = useConfig();
+  const { selectedProject } = useProjects();
   const { setStatus } = useRecordingState();
 
   // Generate meeting title with timestamp
@@ -116,10 +118,19 @@ export function useRecordingStart(
 
       // Start the actual backend recording
       console.log('Starting backend recording with meeting:', randomTitle);
+      // Stash the project association so the stop handler can pass it to
+      // storage when saving. Cleared on stop / on next start.
+      if (selectedProject) {
+        sessionStorage.setItem('last_recording_project_id', selectedProject.id);
+      } else {
+        sessionStorage.removeItem('last_recording_project_id');
+      }
+
       await recordingService.startRecordingWithDevices(
         selectedDevices?.micDevice || null,
         selectedDevices?.systemDevice || null,
-        randomTitle
+        randomTitle,
+        selectedProject?.folder_path || null
       );
       console.log('Backend recording started successfully');
 
@@ -141,7 +152,7 @@ export function useRecordingStart(
       // Re-throw so RecordingControls can handle device-specific errors
       throw error;
     }
-  }, [generateMeetingTitle, setMeetingTitle, setIsRecording, clearTranscripts, setIsMeetingActive, checkParakeetReady, checkIfModelDownloading, selectedDevices, showModal, setStatus]);
+  }, [generateMeetingTitle, setMeetingTitle, setIsRecording, clearTranscripts, setIsMeetingActive, checkParakeetReady, checkIfModelDownloading, selectedDevices, selectedProject, showModal, setStatus]);
 
   // Check for autoStartRecording flag and start recording automatically
   useEffect(() => {
@@ -184,11 +195,18 @@ export function useRecordingStart(
             // Set STARTING status before initiating backend recording
             setStatus(RecordingStatus.STARTING, 'Initializing recording...');
 
+            if (selectedProject) {
+              sessionStorage.setItem('last_recording_project_id', selectedProject.id);
+            } else {
+              sessionStorage.removeItem('last_recording_project_id');
+            }
+
             console.log('Auto-starting backend recording with meeting:', generatedMeetingTitle);
             const result = await recordingService.startRecordingWithDevices(
               selectedDevices?.micDevice || null,
               selectedDevices?.systemDevice || null,
-              generatedMeetingTitle
+              generatedMeetingTitle,
+              selectedProject?.folder_path || null
             );
             console.log('Auto-start backend recording result:', result);
 
@@ -219,6 +237,7 @@ export function useRecordingStart(
     isRecording,
     isAutoStarting,
     selectedDevices,
+    selectedProject,
     generateMeetingTitle,
     setMeetingTitle,
     setIsRecording,
@@ -271,11 +290,18 @@ export function useRecordingStart(
         // Set STARTING status before initiating backend recording
         setStatus(RecordingStatus.STARTING, 'Initializing recording...');
 
+        if (selectedProject) {
+          sessionStorage.setItem('last_recording_project_id', selectedProject.id);
+        } else {
+          sessionStorage.removeItem('last_recording_project_id');
+        }
+
         console.log('Starting backend recording with meeting:', generatedMeetingTitle);
         const result = await recordingService.startRecordingWithDevices(
           selectedDevices?.micDevice || null,
           selectedDevices?.systemDevice || null,
-          generatedMeetingTitle
+          generatedMeetingTitle,
+          selectedProject?.folder_path || null
         );
         console.log('Backend recording result:', result);
 
@@ -308,6 +334,7 @@ export function useRecordingStart(
     isRecording,
     isAutoStarting,
     selectedDevices,
+    selectedProject,
     generateMeetingTitle,
     setMeetingTitle,
     setIsRecording,

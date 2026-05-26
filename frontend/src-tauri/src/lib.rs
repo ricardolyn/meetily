@@ -86,13 +86,15 @@ async fn start_recording<R: Runtime>(
     mic_device_name: Option<String>,
     system_device_name: Option<String>,
     meeting_name: Option<String>,
+    project_folder: Option<String>,
 ) -> Result<(), String> {
     log_info!("🔥 CALLED start_recording with meeting: {:?}", meeting_name);
     log_info!(
-        "📋 Backend received parameters - mic: {:?}, system: {:?}, meeting: {:?}",
+        "📋 Backend received parameters - mic: {:?}, system: {:?}, meeting: {:?}, project_folder: {:?}",
         mic_device_name,
         system_device_name,
-        meeting_name
+        meeting_name,
+        project_folder
     );
 
     if is_recording().await {
@@ -105,6 +107,7 @@ async fn start_recording<R: Runtime>(
         mic_device_name,
         system_device_name,
         meeting_name.clone(),
+        project_folder,
     )
     .await
     {
@@ -300,7 +303,7 @@ async fn start_recording_with_devices<R: Runtime>(
     mic_device_name: Option<String>,
     system_device_name: Option<String>,
 ) -> Result<(), String> {
-    start_recording_with_devices_and_meeting(app, mic_device_name, system_device_name, None).await
+    start_recording_with_devices_and_meeting(app, mic_device_name, system_device_name, None, None).await
 }
 
 #[tauri::command]
@@ -309,9 +312,10 @@ async fn start_recording_with_devices_and_meeting<R: Runtime>(
     mic_device_name: Option<String>,
     system_device_name: Option<String>,
     meeting_name: Option<String>,
+    project_folder: Option<String>,
 ) -> Result<(), String> {
-    log_info!("🚀 CALLED start_recording_with_devices_and_meeting - Mic: {:?}, System: {:?}, Meeting: {:?}",
-             mic_device_name, system_device_name, meeting_name);
+    log_info!("🚀 CALLED start_recording_with_devices_and_meeting - Mic: {:?}, System: {:?}, Meeting: {:?}, Project folder: {:?}",
+             mic_device_name, system_device_name, meeting_name, project_folder);
 
     // Clone meeting_name for notification use later
     let meeting_name_for_notification = meeting_name.clone();
@@ -323,8 +327,12 @@ async fn start_recording_with_devices_and_meeting<R: Runtime>(
                 "No devices specified, starting with defaults and meeting: {:?}",
                 meeting_name
             );
-            audio::recording_commands::start_recording_with_meeting_name(app.clone(), meeting_name)
-                .await
+            audio::recording_commands::start_recording_with_meeting_name(
+                app.clone(),
+                meeting_name,
+                project_folder,
+            )
+            .await
         }
         _ => {
             log_info!(
@@ -338,6 +346,7 @@ async fn start_recording_with_devices_and_meeting<R: Runtime>(
                 mic_device_name,
                 system_device_name,
                 meeting_name,
+                project_folder,
             )
             .await
         }
@@ -622,6 +631,13 @@ pub fn run() {
             api::api_get_meeting_transcripts,
             api::api_save_meeting_title,
             api::api_save_transcript,
+            api::api_get_projects,
+            api::api_get_project,
+            api::api_create_project,
+            api::api_update_project,
+            api::api_delete_project,
+            api::api_assign_meeting_to_project,
+            api::pick_project_folder,
             api::open_meeting_folder,
             api::test_backend_connection,
             api::debug_backend_connection,

@@ -239,6 +239,7 @@ export function useRecordingStop(
         // Get folder_path and meeting_name from recording-stopped event
         const folderPath = sessionStorage.getItem('last_recording_folder_path');
         const savedMeetingName = sessionStorage.getItem('last_recording_meeting_name');
+        const projectId = sessionStorage.getItem('last_recording_project_id');
 
         console.log('💾 Saving COMPLETE transcripts to database...', {
           transcript_count: freshTranscripts.length,
@@ -252,7 +253,8 @@ export function useRecordingStop(
           const responseData = await storageService.saveMeeting(
             savedMeetingName || meetingTitle || 'New Meeting',  // PREFER savedMeetingName (backend source)
             freshTranscripts,
-            folderPath
+            folderPath,
+            projectId
           );
 
           const meetingId = responseData.meeting_id;
@@ -270,6 +272,7 @@ export function useRecordingStop(
 
           // Clean up session storage
           sessionStorage.removeItem('last_recording_folder_path');
+          sessionStorage.removeItem('last_recording_project_id');
           sessionStorage.removeItem('last_recording_meeting_name');
           // Clean up IndexedDB meeting ID (redundant with markMeetingAsSaved cleanup, but ensures cleanup)
           sessionStorage.removeItem('indexeddb_current_meeting_id');

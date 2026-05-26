@@ -60,21 +60,28 @@ export class RecordingService {
   }
 
   /**
-   * Start recording with device configuration and meeting name
+   * Start recording with device configuration, meeting name, and optional project folder
    * @param micDeviceName - Microphone device name (null for default)
    * @param systemDeviceName - System audio device name (null for none)
    * @param meetingName - Meeting name/title
+   * @param projectFolder - Optional absolute path to a project root folder. When
+   *                       provided, the per-meeting subfolder is created inside
+   *                       this directory instead of the default recordings folder.
    * @returns Promise<void>
    */
   async startRecordingWithDevices(
     micDeviceName: string | null,
     systemDeviceName: string | null,
-    meetingName: string
+    meetingName: string,
+    projectFolder: string | null = null
   ): Promise<void> {
     return invoke('start_recording_with_devices_and_meeting', {
+      // Keep snake_case to match the existing keys on this same call; Tauri
+      // 2 accepts both but mixing styles in one payload is confusing.
       mic_device_name: micDeviceName,
       system_device_name: systemDeviceName,
-      meeting_name: meetingName
+      meeting_name: meetingName,
+      project_folder: projectFolder,
     });
   }
 
