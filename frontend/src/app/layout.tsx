@@ -25,6 +25,7 @@ import { RecordingPostProcessingProvider } from '@/contexts/RecordingPostProcess
 import { ImportAudioDialog, ImportDropOverlay } from '@/components/ImportAudio'
 import { ImportDialogProvider } from '@/contexts/ImportDialogContext'
 import { ProjectsProvider } from '@/contexts/ProjectsContext'
+import { LiveNotesProvider } from '@/contexts/LiveNotesContext'
 import { isAudioExtension, getAudioFormatsDisplayList } from '@/constants/audioFormats'
 
 
@@ -243,6 +244,7 @@ export default function RootLayout({
                     <UpdateCheckProvider>
                       <SidebarProvider>
                         <ProjectsProvider>
+                        <LiveNotesProvider>
                         <TooltipProvider>
                           <RecordingPostProcessingProvider>
                             <ImportDialogProvider onOpen={handleOpenImportDialog}>
@@ -268,6 +270,7 @@ export default function RootLayout({
                             </ImportDialogProvider>
                           </RecordingPostProcessingProvider>
                         </TooltipProvider>
+                        </LiveNotesProvider>
                         </ProjectsProvider>
                       </SidebarProvider>
                     </UpdateCheckProvider>

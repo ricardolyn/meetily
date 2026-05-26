@@ -17,6 +17,8 @@ import { useRecordingStateSync } from '@/hooks/useRecordingStateSync';
 import { useRecordingStart } from '@/hooks/useRecordingStart';
 import { useRecordingStop } from '@/hooks/useRecordingStop';
 import { ProjectPicker } from '@/components/RecordingControls/ProjectPicker';
+import { LiveNotesPill } from '@/components/RecordingControls/LiveNotesPill';
+import { useLiveNotes } from '@/hooks/useLiveNotes';
 import { useTranscriptRecovery } from '@/hooks/useTranscriptRecovery';
 import { TranscriptRecovery } from '@/components/TranscriptRecovery';
 import { indexedDBService } from '@/services/indexedDBService';
@@ -62,6 +64,11 @@ export default function Home() {
   } = useTranscriptRecovery();
 
   const router = useRouter();
+
+  // meetingTitle is the only stable identifier before the meeting is saved
+  // to SQLite. The backend only uses it for logging; the actual LLM call
+  // is purely transcript-driven.
+  useLiveNotes(meetingTitle ?? null);
 
   useEffect(() => {
     // Track page view
@@ -235,6 +242,7 @@ export default function Home() {
                   {!recordingState.isRecording && status !== RecordingStatus.STARTING && (
                     <ProjectPicker disabled={isRecordingDisabled} />
                   )}
+                  <LiveNotesPill isRecording={recordingState.isRecording} />
                   <div className="bg-white rounded-full shadow-lg flex items-center">
                     <RecordingControls
                       isRecording={recordingState.isRecording}
