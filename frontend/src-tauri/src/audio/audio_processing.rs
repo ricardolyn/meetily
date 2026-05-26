@@ -24,9 +24,13 @@ pub fn sanitize_filename(name: &str) -> String {
         .to_string()
 }
 
-/// Create a meeting folder with timestamp and return the path
-/// Creates structure: base_path/MeetingName_YYYY-MM-DD_HH-MM/
-///                    ├── .checkpoints/  (for incremental saves, optional)
+/// Create a meeting folder and return the path. The folder name is the
+/// sanitised meeting name. A `_YYYY-MM-DD_HH-MM` timestamp suffix is only
+/// appended when the meeting name does NOT already contain a date — the
+/// frontend / Rust auto-fallback always prefix "Meeting <ISO timestamp>",
+/// and appending a second timestamp produced names like
+/// `Meeting 2026-05-25_17-36-55_2026-05-25_16-36`. If a folder with the
+/// resulting name already exists, append a numeric suffix to make it unique.
 ///
 /// # Arguments
 /// * `base_path` - Base directory for meetings
@@ -37,10 +41,43 @@ pub fn create_meeting_folder(
     meeting_name: &str,
     create_checkpoints_dir: bool,
 ) -> Result<PathBuf> {
-    let timestamp = Utc::now().format("%Y-%m-%d_%H-%M").to_string();
     let sanitized_name = sanitize_filename(meeting_name);
-    let folder_name = format!("{}_{}", sanitized_name, timestamp);
-    let meeting_folder = base_path.join(folder_name);
+
+    // Detect either an ISO `YYYY-MM-DD` or `DD_MM_YY` (frontend) date in the name.
+    let already_has_date = {
+        let bytes = sanitized_name.as_bytes();
+        // Cheap manual check — avoid pulling in regex.
+        let has_iso = bytes.windows(10).any(|w| {
+            w[4] == b'-'
+                && w[7] == b'-'
+                && w[0..4].iter().all(|c| c.is_ascii_digit())
+                && w[5..7].iter().all(|c| c.is_ascii_digit())
+                && w[8..10].iter().all(|c| c.is_ascii_digit())
+        });
+        let has_underscored = bytes.windows(8).any(|w| {
+            w[2] == b'_'
+                && w[5] == b'_'
+                && w[0..2].iter().all(|c| c.is_ascii_digit())
+                && w[3..5].iter().all(|c| c.is_ascii_digit())
+                && w[6..8].iter().all(|c| c.is_ascii_digit())
+        });
+        has_iso || has_underscored
+    };
+
+    let base_name = if already_has_date {
+        sanitized_name.clone()
+    } else {
+        let timestamp = Utc::now().format("%Y-%m-%d_%H-%M").to_string();
+        format!("{}_{}", sanitized_name, timestamp)
+    };
+
+    // Ensure uniqueness in case the same name was used recently.
+    let mut meeting_folder = base_path.join(&base_name);
+    let mut suffix = 2;
+    while meeting_folder.exists() {
+        meeting_folder = base_path.join(format!("{}_{}", base_name, suffix));
+        suffix += 1;
+    }
 
     // Create main meeting folder
     std::fs::create_dir_all(&meeting_folder)?;
