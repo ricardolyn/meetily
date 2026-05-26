@@ -39,6 +39,7 @@ pub mod analytics;
 pub mod api;
 pub mod audio;
 pub mod call_detector;
+pub mod cleanup;
 pub mod config;
 pub mod console_utils;
 pub mod database;
@@ -419,6 +420,10 @@ pub fn run() {
             if let Err(e) = tray::create_tray(_app.handle()) {
                 log::error!("Failed to create system tray: {}", e);
             }
+
+            // Run a one-shot cleanup of audio files / checkpoints older than
+            // 30 days across all meeting folders. Keeps transcripts/summaries.
+            cleanup::run_startup_cleanup(_app.handle().clone());
 
             // Background call-detection (macOS only). Currently OPT-IN via
             // the MEETILY_CALL_DETECTION env var because process-name polling

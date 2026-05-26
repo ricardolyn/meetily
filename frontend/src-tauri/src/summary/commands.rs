@@ -29,6 +29,11 @@ pub struct ProcessTranscriptResponse {
 /// Saves a meeting summary (Native SQLx implementation)
 ///
 /// Expected format: { "markdown": "...", "summary_json": [...BlockNote blocks...] }
+///
+/// In addition to the SQLite write, also persists `summary.json` (full
+/// structure) and `summary.md` (markdown extracted) into the meeting's
+/// on-disk folder so the summary lives alongside transcripts.json and
+/// survives DB rebuilds or project-folder copies.
 #[tauri::command]
 pub async fn api_save_meeting_summary<R: Runtime>(
     _app: AppHandle<R>,
@@ -45,7 +50,18 @@ pub async fn api_save_meeting_summary<R: Runtime>(
 
     match SummaryProcessesRepository::update_meeting_summary(pool, &meeting_id, &summary).await {
         Ok(true) => {
-            log_info!("Summary saved successfully for meeting_id: {}", meeting_id);
+            log_info!("Summary saved to SQLite for meeting_id: {}", meeting_id);
+
+            // Best-effort filesystem persist into the meeting folder. We
+            // already promise the DB write; a failed file write is logged
+            // but doesn't fail the command.
+            if let Err(e) = persist_summary_to_meeting_folder(pool, &meeting_id, &summary).await {
+                log_warn!(
+                    "Summary saved to DB but failed to write to meeting folder: {}",
+                    e
+                );
+            }
+
             Ok(serde_json::json!({
                 "message": "Meeting summary saved successfully"
             }))
@@ -62,6 +78,54 @@ pub async fn api_save_meeting_summary<R: Runtime>(
             Err(e.to_string())
         }
     }
+}
+
+/// Write the summary structure to `<meeting folder>/summary.json` and, if a
+/// `markdown` field is present, the rendered markdown to `summary.md`.
+/// Skips silently when the meeting has no folder_path on disk.
+async fn persist_summary_to_meeting_folder(
+    pool: &sqlx::SqlitePool,
+    meeting_id: &str,
+    summary: &serde_json::Value,
+) -> Result<(), String> {
+    let folder_path: Option<String> = sqlx::query_as::<_, (Option<String>,)>(
+        "SELECT folder_path FROM meetings WHERE id = ?",
+    )
+    .bind(meeting_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("read folder_path: {}", e))?
+    .and_then(|(p,)| p);
+
+    let Some(folder) = folder_path else {
+        log_info!(
+            "Meeting {} has no folder_path; skipping summary file write",
+            meeting_id
+        );
+        return Ok(());
+    };
+    let folder_p = std::path::Path::new(&folder);
+    if !folder_p.exists() {
+        log_warn!(
+            "Meeting folder {} does not exist on disk; skipping summary file write",
+            folder
+        );
+        return Ok(());
+    }
+
+    let json_path = folder_p.join("summary.json");
+    let pretty = serde_json::to_string_pretty(summary)
+        .map_err(|e| format!("serialize summary.json: {}", e))?;
+    std::fs::write(&json_path, pretty).map_err(|e| format!("write summary.json: {}", e))?;
+    log_info!("Wrote {}", json_path.display());
+
+    if let Some(md) = summary.get("markdown").and_then(|v| v.as_str()) {
+        let md_path = folder_p.join("summary.md");
+        std::fs::write(&md_path, md).map_err(|e| format!("write summary.md: {}", e))?;
+        log_info!("Wrote {}", md_path.display());
+    }
+
+    Ok(())
 }
 
 /// Gets summary status and data (Native SQLx implementation)
