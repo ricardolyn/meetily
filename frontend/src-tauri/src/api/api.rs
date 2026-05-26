@@ -31,6 +31,13 @@ pub struct ApiResponse<T> {
 pub struct Meeting {
     pub id: String,
     pub title: String,
+    /// RFC3339 timestamp the meeting started — used by the sidebar to
+    /// prefix the displayed title with a date/time stamp regardless of
+    /// what the LLM-renamed title looks like.
+    pub created_at: String,
+    /// Project association so the sidebar can filter by project.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -362,6 +369,8 @@ pub async fn api_get_meetings<R: Runtime>(
                 .map(|m| Meeting {
                     id: m.id,
                     title: m.title,
+                    created_at: m.created_at.0.to_rfc3339(),
+                    project_id: m.project_id,
                 })
                 .collect();
             Ok(result)
@@ -1577,6 +1586,156 @@ pub async fn api_delete_project<R: Runtime>(
             Err(format!("Failed to delete project: {}", e))
         }
     }
+}
+
+/// Result of moving a meeting to a project: the new on-disk folder path (if any)
+/// so the frontend can immediately use it without a refetch.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MoveMeetingResult {
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_folder_path: Option<String>,
+}
+
+/// Recursively copy a directory tree (no symlink support — meeting folders
+/// don't contain symlinks). Used as a cross-volume fallback when fs::rename
+/// returns EXDEV.
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let target = dst.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_recursive(&entry.path(), &target)?;
+        } else if file_type.is_file() {
+            std::fs::copy(entry.path(), &target)?;
+        }
+        // Symlinks and other types are skipped on purpose.
+    }
+    Ok(())
+}
+
+/// Move a meeting between projects (or to/from "no project"), updating both
+/// the database link AND the on-disk meeting folder. Atomic intent:
+///   1. Move files on disk first (rename or cross-volume copy+delete)
+///   2. Update meetings.project_id and meetings.folder_path
+///   3. Return the new folder path so the UI can reflect it
+///
+/// If the meeting has no folder_path on disk (legacy or never-saved), only the
+/// DB link is updated and `new_folder_path` is None.
+#[tauri::command]
+pub async fn api_move_meeting_to_project<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    request: AssignMeetingProjectRequest,
+) -> Result<MoveMeetingResult, String> {
+    log_info!(
+        "api_move_meeting_to_project called: meeting={}, project={:?}",
+        request.meeting_id,
+        request.project_id
+    );
+    let pool = state.db_manager.pool();
+
+    // 1. Resolve current meeting + its folder
+    let meeting: Option<crate::database::models::MeetingModel> = sqlx::query_as(
+        "SELECT id, title, created_at, updated_at, folder_path, project_id FROM meetings WHERE id = ?",
+    )
+    .bind(&request.meeting_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Database error reading meeting: {}", e))?;
+
+    let meeting = meeting.ok_or_else(|| format!("Meeting not found: {}", request.meeting_id))?;
+
+    // 2. Resolve target project folder (None for "no project" — falls back to default recordings)
+    let target_base: std::path::PathBuf = if let Some(project_id) = request.project_id.as_deref() {
+        match crate::database::repositories::projects::ProjectsRepository::get_project(pool, project_id)
+            .await
+        {
+            Ok(Some(p)) => std::path::PathBuf::from(&p.folder_path),
+            Ok(None) => return Err(format!("Project not found: {}", project_id)),
+            Err(e) => return Err(format!("Database error reading project: {}", e)),
+        }
+    } else {
+        crate::audio::recording_preferences::get_default_recordings_folder()
+    };
+
+    // 3. Move files on disk if the meeting actually has a folder
+    let new_folder_path: Option<String> = match meeting.folder_path.as_deref() {
+        Some(source_str) if !source_str.is_empty() => {
+            let source = std::path::PathBuf::from(source_str);
+            if !source.exists() {
+                log_warn!(
+                    "Meeting {} folder_path {} does not exist on disk; updating DB only",
+                    request.meeting_id,
+                    source_str
+                );
+                None
+            } else {
+                let basename = source
+                    .file_name()
+                    .ok_or_else(|| format!("Cannot derive meeting folder name from {}", source_str))?;
+                let target = target_base.join(basename);
+
+                // No-op if source == target (e.g. already in this project)
+                if source == target {
+                    log_info!("Meeting folder already at target {}; skipping move", target.display());
+                    Some(target.to_string_lossy().to_string())
+                } else if target.exists() {
+                    return Err(format!(
+                        "A folder named '{}' already exists at the destination. Rename it and try again.",
+                        target.display()
+                    ));
+                } else {
+                    // Ensure target parent exists
+                    if let Some(parent) = target.parent() {
+                        std::fs::create_dir_all(parent)
+                            .map_err(|e| format!("Failed to create target folder: {}", e))?;
+                    }
+                    match std::fs::rename(&source, &target) {
+                        Ok(()) => {
+                            log_info!("Moved meeting folder: {} -> {}", source.display(), target.display());
+                        }
+                        // Cross-volume rename: copy + delete fallback
+                        Err(e) if e.raw_os_error() == Some(18) || e.kind() == std::io::ErrorKind::CrossesDevices => {
+                            log_info!("Cross-volume move detected; falling back to copy+delete");
+                            copy_dir_recursive(&source, &target)
+                                .map_err(|e| format!("Failed to copy folder across volumes: {}", e))?;
+                            std::fs::remove_dir_all(&source).map_err(|e| {
+                                format!("Folder copied but cleanup of source failed: {}", e)
+                            })?;
+                        }
+                        Err(e) => return Err(format!("Failed to move folder: {}", e)),
+                    }
+                    Some(target.to_string_lossy().to_string())
+                }
+            }
+        }
+        _ => None,
+    };
+
+    // 4. Update DB: project_id + folder_path (if it changed)
+    let now = chrono::Utc::now().naive_utc();
+    let folder_for_db: Option<&str> = new_folder_path
+        .as_deref()
+        .or(meeting.folder_path.as_deref());
+
+    sqlx::query(
+        "UPDATE meetings SET project_id = ?, folder_path = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(&request.project_id)
+    .bind(folder_for_db)
+    .bind(now)
+    .bind(&request.meeting_id)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to update meeting row: {}", e))?;
+
+    Ok(MoveMeetingResult {
+        status: "success".to_string(),
+        new_folder_path,
+    })
 }
 
 /// Open a native directory picker and return the selected absolute path.

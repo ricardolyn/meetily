@@ -509,6 +509,22 @@ pub fn run() {
 
             Ok(())
         })
+        .on_window_event(|window, event| {
+            // Hide the main window to the tray on close instead of exiting.
+            // The tray (Start/Pause/Stop Recording, Open Main Window, Quit)
+            // keeps the app alive so background recording / call detection
+            // keep running. Quit is reachable via the tray's Quit item.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    api.prevent_close();
+                    if let Err(e) = window.hide() {
+                        log::error!("Failed to hide main window on close request: {}", e);
+                    } else {
+                        log::info!("Main window hidden to tray on close request");
+                    }
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             start_recording,
             stop_recording,
@@ -641,6 +657,7 @@ pub fn run() {
             api::api_update_project,
             api::api_delete_project,
             api::api_assign_meeting_to_project,
+            api::api_move_meeting_to_project,
             api::pick_project_folder,
             tray::refresh_tray_menu,
             api::open_meeting_folder,

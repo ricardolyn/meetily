@@ -7,16 +7,25 @@ import { invoke } from '@tauri-apps/api/core';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
 
 
-interface SidebarItem {
+export interface SidebarItem {
   id: string;
   title: string;
   type: 'folder' | 'file';
   children?: SidebarItem[];
+  /** Meeting start timestamp (RFC3339). Only present on `file` items that
+   * correspond to real meetings; used to prefix the displayed title. */
+  created_at?: string;
+  /** Project association for meeting items, used by the sidebar filter. */
+  project_id?: string | null;
 }
 
 export interface CurrentMeeting {
   id: string;
   title: string;
+  /** RFC3339 timestamp, used to prefix the displayed title with date/time. */
+  created_at?: string;
+  /** Project association, used by the sidebar project filter. */
+  project_id?: string | null;
 }
 
 // Search result type for transcript search
@@ -86,10 +95,17 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
   const fetchMeetings = React.useCallback(async () => {
     if (serverAddress) {
       try {
-        const meetings = await invoke('api_get_meetings') as Array<{ id: string, title: string }>;
-        const transformedMeetings = meetings.map((meeting: any) => ({
-          id: meeting.id,
-          title: meeting.title
+        const meetings = await invoke('api_get_meetings') as Array<{
+          id: string;
+          title: string;
+          created_at?: string;
+          project_id?: string | null;
+        }>;
+        const transformedMeetings: CurrentMeeting[] = meetings.map(m => ({
+          id: m.id,
+          title: m.title,
+          created_at: m.created_at,
+          project_id: m.project_id ?? null,
         }));
         setMeetings(transformedMeetings);
         Analytics.trackBackendConnection(true);
@@ -119,8 +135,14 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
       title: 'Meeting Notes',
       type: 'folder' as const,
       children: [
-        ...meetings.map(meeting => ({ id: meeting.id, title: meeting.title, type: 'file' as const }))
-      ]
+        ...meetings.map(meeting => ({
+          id: meeting.id,
+          title: meeting.title,
+          type: 'file' as const,
+          created_at: meeting.created_at,
+          project_id: meeting.project_id,
+        })),
+      ],
     },
   ];
 

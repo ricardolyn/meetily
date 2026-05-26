@@ -58,7 +58,10 @@ export function MeetingProjectChip({
     if (pendingProjectId === undefined) return;
     setIsAssigning(true);
     try {
-      await projectsService.assignMeeting(meetingId, pendingProjectId);
+      // moveMeeting updates DB association AND moves the on-disk folder
+      // (the recording, transcripts.json, metadata.json end up inside the
+      // new project's folder).
+      await projectsService.moveMeeting(meetingId, pendingProjectId);
       await refreshProjects();
       onAssigned?.(pendingProjectId);
       toast.success(
@@ -68,7 +71,7 @@ export function MeetingProjectChip({
       );
       setPendingProjectId(undefined);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to reassign meeting');
+      toast.error(e instanceof Error ? e.message : 'Failed to move meeting');
     } finally {
       setIsAssigning(false);
     }
@@ -121,8 +124,10 @@ export function MeetingProjectChip({
                 : 'Remove meeting from project?'}
             </DialogTitle>
             <DialogDescription>
-              This only updates the project association in the database. Existing
-              recording, transcript and metadata files on disk are not moved.
+              The meeting's folder — including the recording, transcripts and
+              metadata — will be moved into the destination project's folder
+              on disk. If a folder with the same name already exists at the
+              destination, the move will fail with an error.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
