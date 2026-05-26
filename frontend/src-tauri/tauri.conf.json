@@ -19,6 +19,21 @@
                 "fullscreen": false,
                 "theme": "Light",
                 "decorations": true
+            },
+            {
+                "label": "live-notes",
+                "title": "Live notes",
+                "url": "/live-notes",
+                "alwaysOnTop": true,
+                "decorations": false,
+                "transparent": false,
+                "resizable": true,
+                "width": 320,
+                "height": 480,
+                "minWidth": 280,
+                "minHeight": 320,
+                "visible": false,
+                "skipTaskbar": true
             }
         ],
         "macOSPrivateApi": true,
