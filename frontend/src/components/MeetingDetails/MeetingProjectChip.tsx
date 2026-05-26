@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Check, ChevronDown, FolderOpen, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -44,13 +44,26 @@ export function MeetingProjectChip({
   const { projects, refreshProjects } = useProjects();
   const [pendingProjectId, setPendingProjectId] = useState<string | null | undefined>(undefined);
   const [isAssigning, setIsAssigning] = useState(false);
+  // Local override of currentProjectId after a successful move, so the chip
+  // updates immediately without waiting for the parent meeting object to
+  // re-fetch (which it currently doesn't do).
+  const [localProjectId, setLocalProjectId] = useState<string | null | undefined>(undefined);
 
-  const currentProject = currentProjectId
-    ? projects.find(p => p.id === currentProjectId) ?? null
+  // Reset the override whenever the parent re-renders with a new meeting
+  // (handles navigation between meetings within the same mounted chip).
+  useEffect(() => {
+    setLocalProjectId(undefined);
+  }, [meetingId, currentProjectId]);
+
+  const effectiveProjectId =
+    localProjectId !== undefined ? localProjectId : currentProjectId ?? null;
+
+  const currentProject = effectiveProjectId
+    ? projects.find(p => p.id === effectiveProjectId) ?? null
     : null;
 
   function startAssign(projectId: string | null) {
-    if (projectId === (currentProjectId ?? null)) return;
+    if (projectId === effectiveProjectId) return;
     setPendingProjectId(projectId);
   }
 
@@ -62,6 +75,9 @@ export function MeetingProjectChip({
       // (the recording, transcripts.json, metadata.json end up inside the
       // new project's folder).
       await projectsService.moveMeeting(meetingId, pendingProjectId);
+      // Set local override so the chip reflects the new project immediately,
+      // even though the parent's `meeting.project_id` prop is still stale.
+      setLocalProjectId(pendingProjectId);
       await refreshProjects();
       onAssigned?.(pendingProjectId);
       toast.success(

@@ -830,6 +830,26 @@ const Sidebar: React.FC = () => {
                   .filter(item => item.type === 'folder' && expandedFolders.has(item.id) && item.children)
                   .map(item => (
                     <div key={`${item.id}-children`} className="mx-3">
+                      {/* Project filter dropdown shown above the meeting list */}
+                      {item.id === 'meetings' && projects.length > 0 && (
+                        <div className="py-2">
+                          <Select
+                            value={meetingFilterProjectId}
+                            onValueChange={setMeetingFilterProjectId}
+                          >
+                            <SelectTrigger className="h-7 text-xs">
+                              <SelectValue placeholder="All meetings" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value={FILTER_ALL}>All meetings</SelectItem>
+                              <SelectItem value={FILTER_NO_PROJECT}>No project</SelectItem>
+                              {projects.map(p => (
+                                <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      )}
                       {item.children!.map(child => renderItem(child, 1))}
                     </div>
                   ))}
