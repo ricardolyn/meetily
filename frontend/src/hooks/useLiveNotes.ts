@@ -26,8 +26,15 @@ export function useLiveNotes(meetingId: string | null) {
   const inFlightRef = useRef(false);
   const lastTranscriptCountRef = useRef(0);
   const settingsRef = useRef<LiveNotesSettings | null>(null);
+  // Mirror reactive state into refs so the tick can read fresh values
+  // without putting them on the effect's dep array — otherwise the
+  // interval would be torn down and re-created on every transcript update.
   const latestRef = useRef<LiveNotes | null>(null);
+  const transcriptsRef = useRef(transcripts);
+  const isPausedRef = useRef(isPaused);
   latestRef.current = latest;
+  transcriptsRef.current = transcripts;
+  isPausedRef.current = isPaused;
 
   // Load settings once (refreshed on each recording start in case the
   // user changed them in Settings since this hook mounted).
@@ -67,30 +74,41 @@ export function useLiveNotes(meetingId: string | null) {
   }, [isRecording, enabledForMeeting]);
 
   // The actual tick.
+  // NOTE: `transcripts` / `isPaused` deliberately NOT in the dep array — we
+  // read them through refs above so the interval is established once per
+  // recording (not re-created on every transcript). The no-new-transcripts
+  // guard inside the tick handles the freshness check.
+  // TODO(v2): re-read settings on a "live-notes-settings-changed" event so
+  // interval changes mid-recording apply without restarting the recording.
   useEffect(() => {
     if (!isRecording || !enabledForMeeting || !meetingId) return;
     const intervalMs = (settingsRef.current?.intervalSeconds ?? 60) * 1000;
+    let mounted = true;
 
     const tick = async () => {
+      if (!mounted) return;
       if (inFlightRef.current) return;                    // single-flight
-      if (isPaused) return;                                // skip while paused
-      if (transcripts.length === lastTranscriptCountRef.current) return; // no new content
+      if (isPausedRef.current) return;                     // skip while paused
+      const currentTranscripts = transcriptsRef.current;
+      if (currentTranscripts.length === lastTranscriptCountRef.current) return;
       const cfg = await resolveModelConfig();
       if (!cfg) {
         await emit('live-notes-error', 'No LLM provider configured');
         return;
       }
-      const recent = buildRecentTranscriptText(transcripts, intervalMs);
+      const recent = buildRecentTranscriptText(currentTranscripts, intervalMs);
       if (!recent.trim()) return;
       inFlightRef.current = true;
       await emit('live-notes-refreshing');
       try {
         const result = await liveNotesService.generate(meetingId, recent, latestRef.current, cfg);
+        if (!mounted) return;
         setLatest(result);
-        lastTranscriptCountRef.current = transcripts.length;
+        lastTranscriptCountRef.current = currentTranscripts.length;
         await emit('live-notes-update', result);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
+        console.error('[live-notes] tick failed:', msg);
         await emit('live-notes-error', msg);
       } finally {
         inFlightRef.current = false;
@@ -98,20 +116,24 @@ export function useLiveNotes(meetingId: string | null) {
     };
 
     const handle = window.setInterval(tick, intervalMs);
-    // Floating-window-triggered manual refresh and pause.
+    // Floating-window-triggered manual refresh and pause. `mounted` gate
+    // covers the race where the listen() Promise resolves after teardown.
     const unlistenRefreshP = listen<void>('live-notes-refresh-request', () => {
+      if (!mounted) return;
       void tick();
     });
     const unlistenPauseP = listen<void>('live-notes-pause-request', () => {
+      if (!mounted) return;
       setEnabledForMeeting(false);
     });
 
     return () => {
+      mounted = false;
       window.clearInterval(handle);
       unlistenRefreshP.then(u => u()).catch(() => {});
       unlistenPauseP.then(u => u()).catch(() => {});
     };
-  }, [isRecording, enabledForMeeting, isPaused, meetingId, transcripts, setLatest, setEnabledForMeeting]);
+  }, [isRecording, enabledForMeeting, meetingId, setLatest, setEnabledForMeeting]);
 }
 
 function buildRecentTranscriptText(
