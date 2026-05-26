@@ -71,7 +71,12 @@ export function LiveNotesSettings() {
       </div>
 
       <div className="flex items-center justify-between gap-4">
-        <Label className="font-normal">Refresh interval</Label>
+        <div>
+          <Label className="font-normal">Refresh interval</Label>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Changes apply to the next recording.
+          </p>
+        </div>
         <Select
           value={String(settings.intervalSeconds)}
           onValueChange={v => update({ intervalSeconds: Number(v) as LiveNotesSettings['intervalSeconds'] })}
