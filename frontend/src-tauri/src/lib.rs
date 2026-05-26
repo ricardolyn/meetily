@@ -41,6 +41,7 @@ pub mod audio;
 pub mod call_detector;
 pub mod cleanup;
 pub mod config;
+pub mod live_notes;
 pub mod console_utils;
 pub mod database;
 pub mod notifications;
@@ -692,6 +693,7 @@ pub fn run() {
             api::api_move_meeting_to_project,
             api::pick_project_folder,
             tray::refresh_tray_menu,
+            live_notes::api_generate_live_notes,
             api::open_meeting_folder,
             api::test_backend_connection,
             api::debug_backend_connection,
