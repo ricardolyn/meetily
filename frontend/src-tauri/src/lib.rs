@@ -420,8 +420,20 @@ pub fn run() {
                 log::error!("Failed to create system tray: {}", e);
             }
 
-            // Start background call-detection (macOS-only behaviour; stub on other OS)
-            call_detector::start_call_detector(_app.handle().clone());
+            // Background call-detection (macOS only). Currently OPT-IN via
+            // the MEETILY_CALL_DETECTION env var because process-name polling
+            // produces false positives (apps like Zoom/Teams keep a background
+            // process running for notifications, so "running" != "in a call").
+            // TODO: replace process polling with window-title or Core Audio
+            // detection, then make this opt-out via a Settings toggle.
+            if std::env::var("MEETILY_CALL_DETECTION")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false)
+            {
+                call_detector::start_call_detector(_app.handle().clone());
+            } else {
+                log::info!("Call detector disabled (set MEETILY_CALL_DETECTION=1 to enable)");
+            }
 
             // Initialize notification system with proper defaults
             log::info!("Initializing notification system...");

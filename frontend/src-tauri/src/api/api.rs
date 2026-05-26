@@ -785,9 +785,53 @@ pub async fn api_delete_meeting<R: Runtime>(
 
     let pool = state.db_manager.pool();
 
+    // 1. Capture folder_path BEFORE deleting DB rows so we can clean up the
+    //    on-disk meeting folder (audio.mp4, transcripts.json, metadata.json,
+    //    .checkpoints/ etc) after the DB delete succeeds.
+    let folder_path: Option<String> = match sqlx::query_as::<_, (Option<String>,)>(
+        "SELECT folder_path FROM meetings WHERE id = ?",
+    )
+    .bind(&meeting_id)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some((path,))) => path,
+        Ok(None) => None,
+        Err(e) => {
+            log_warn!("Could not read folder_path before delete: {}", e);
+            None
+        }
+    };
+
+    // 2. Delete DB rows (transcripts, summary, meeting itself).
     match MeetingsRepository::delete_meeting(pool, &meeting_id).await {
         Ok(true) => {
-            log_info!("Successfully deleted meeting {}", meeting_id);
+            log_info!("Successfully deleted meeting {} from DB", meeting_id);
+
+            // 3. Best-effort filesystem cleanup. We do this after the DB delete
+            //    succeeded so a partial failure leaves the user with at worst an
+            //    unreferenced folder on disk (not a half-deleted DB row).
+            if let Some(path) = folder_path.as_deref() {
+                if !path.is_empty() {
+                    let p = std::path::Path::new(path);
+                    if p.exists() {
+                        match std::fs::remove_dir_all(p) {
+                            Ok(()) => log_info!("Removed meeting folder: {}", path),
+                            Err(e) => log_warn!(
+                                "DB row deleted but failed to remove folder {}: {}",
+                                path,
+                                e
+                            ),
+                        }
+                    } else {
+                        log_info!(
+                            "Meeting folder_path {} did not exist on disk; skipping FS cleanup",
+                            path
+                        );
+                    }
+                }
+            }
+
             Ok(serde_json::json!({
                 "status": "success",
                 "message": "Meeting deleted successfully"

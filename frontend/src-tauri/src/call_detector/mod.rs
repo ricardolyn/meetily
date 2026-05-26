@@ -25,17 +25,17 @@ const POLL_INTERVAL_SECS: u64 = 5;
 /// quit). 2 samples × 5 s = ≥5 s of consistent presence.
 const DEBOUNCE_SAMPLES: u8 = 2;
 
-// All-lowercase needle list; scan_for_call_app lowercases the haystack.
+// All-lowercase EXACT basenames produced by `ps -axo comm=`. Substring matching
+// was too loose — e.g. "discord" matched the Discord background helper that
+// stays alive even when no call is active. We now compare the process basename
+// for exact equality to keep false positives down. Apps that keep a background
+// process running for push notifications (Discord, Skype, FaceTime) are
+// intentionally excluded.
 #[cfg(target_os = "macos")]
 const KNOWN_CALL_APPS: &[&str] = &[
     "zoom.us",
-    "microsoft teams",
     "msteams",
-    "webex",
-    "cisco webex",
-    "discord",
-    "facetime",
-    "skype",
+    "cisco webex meetings",
     "gotomeeting",
     "bluejeans",
 ];
@@ -106,9 +106,16 @@ fn scan_for_call_app() -> bool {
             if trimmed.is_empty() {
                 continue;
             }
-            let lower = trimmed.to_lowercase();
+            // `ps -axo comm=` returns the executable basename. Take just the
+            // file name (some paths show with directories) and compare
+            // case-insensitively for exact equality against the known list.
+            let basename = trimmed
+                .rsplit('/')
+                .next()
+                .unwrap_or(trimmed)
+                .to_lowercase();
             for app in KNOWN_CALL_APPS {
-                if lower.contains(app) {
+                if basename == *app {
                     return true;
                 }
             }
