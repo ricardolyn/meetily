@@ -534,6 +534,21 @@ pub fn run() {
                     } else {
                         log::info!("Main window hidden to tray on close request");
                     }
+                    // Drop the Dock icon while only the tray is visible.
+                    // tray::focus_main_window restores Regular policy when the
+                    // user reopens the window from the tray.
+                    #[cfg(target_os = "macos")]
+                    {
+                        let app_handle = window.app_handle();
+                        if let Err(e) = app_handle
+                            .set_activation_policy(tauri::ActivationPolicy::Accessory)
+                        {
+                            log::error!(
+                                "Failed to set activation policy to Accessory: {}",
+                                e
+                            );
+                        }
+                    }
                 }
             }
         })

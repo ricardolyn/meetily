@@ -564,6 +564,14 @@ pub async fn refresh_tray_menu<R: Runtime>(app: AppHandle<R>) -> Result<(), Stri
 }
 
 fn focus_main_window<R: Runtime>(app: &AppHandle<R>) {
+    // Restore the Dock icon before bringing the window back — symmetric to
+    // the Accessory policy set in lib.rs when the window is closed.
+    #[cfg(target_os = "macos")]
+    {
+        if let Err(e) = app.set_activation_policy(tauri::ActivationPolicy::Regular) {
+            log::error!("Failed to set activation policy to Regular: {}", e);
+        }
+    }
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
         let _ = window.show();
