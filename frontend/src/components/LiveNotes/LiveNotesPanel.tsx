@@ -74,7 +74,7 @@ export function LiveNotesPanel() {
           {status.kind === 'ok' && `updated ${formatTime(status.at)}`}
           {status.kind === 'error' && (
             <span className="text-amber-600" title={status.message}>
-              refresh failed
+              {/timed out/i.test(status.message) ? 'took too long' : 'refresh failed'}
             </span>
           )}
         </span>
