@@ -22,26 +22,33 @@ export function LiveNotesPanel() {
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
 
   useEffect(() => {
+    // `cancelled` guards against unmounting before the async listen()
+    // calls resolve — otherwise the cleanup runs on a partial array and
+    // any not-yet-resolved listener leaks.
+    let cancelled = false;
     const unlistens: Array<() => void> = [];
     (async () => {
-      unlistens.push(
-        await listen<LiveNotes>('live-notes-update', event => {
-          setNotes(event.payload);
-          setStatus({ kind: 'ok', at: event.payload.generated_at });
-        })
-      );
-      unlistens.push(
-        await listen<void>('live-notes-refreshing', () => {
-          setStatus({ kind: 'refreshing' });
-        })
-      );
-      unlistens.push(
-        await listen<string>('live-notes-error', event => {
-          setStatus({ kind: 'error', message: event.payload });
-        })
-      );
+      const u1 = await listen<LiveNotes>('live-notes-update', event => {
+        setNotes(event.payload);
+        setStatus({ kind: 'ok', at: event.payload.generated_at });
+      });
+      if (cancelled) { u1(); return; }
+      unlistens.push(u1);
+
+      const u2 = await listen<void>('live-notes-refreshing', () => {
+        setStatus({ kind: 'refreshing' });
+      });
+      if (cancelled) { u2(); return; }
+      unlistens.push(u2);
+
+      const u3 = await listen<string>('live-notes-error', event => {
+        setStatus({ kind: 'error', message: event.payload });
+      });
+      if (cancelled) { u3(); return; }
+      unlistens.push(u3);
     })();
     return () => {
+      cancelled = true;
       for (const u of unlistens) u();
     };
   }, []);
@@ -99,8 +106,8 @@ export function LiveNotesPanel() {
         <Section title="Asked of you">
           {notes && notes.asked_of_you.length > 0 ? (
             <ul className="list-disc list-inside text-gray-800 space-y-1">
-              {notes.asked_of_you.map((item, i) => (
-                <li key={i}>{item}</li>
+              {notes.asked_of_you.map(item => (
+                <li key={item}>{item}</li>
               ))}
             </ul>
           ) : (
@@ -111,8 +118,8 @@ export function LiveNotesPanel() {
         <Section title="Action items so far">
           {notes && notes.action_items.length > 0 ? (
             <ul className="list-disc list-inside text-gray-800 space-y-1">
-              {notes.action_items.map((item, i) => (
-                <li key={i}>{item}</li>
+              {notes.action_items.map(item => (
+                <li key={item}>{item}</li>
               ))}
             </ul>
           ) : (
