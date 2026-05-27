@@ -426,19 +426,18 @@ pub fn run() {
             // 30 days across all meeting folders. Keeps transcripts/summaries.
             cleanup::run_startup_cleanup(_app.handle().clone());
 
-            // Background call-detection (macOS only). Currently OPT-IN via
-            // the MEETILY_CALL_DETECTION env var because process-name polling
-            // produces false positives (apps like Zoom/Teams keep a background
-            // process running for notifications, so "running" != "in a call").
-            // TODO: replace process polling with window-title or Core Audio
-            // detection, then make this opt-out via a Settings toggle.
+            // Background call-detection (macOS only). The detector polls
+            // Core Audio for the default-input-device IsRunningSomewhere
+            // property, which fires only when a process actually opens the
+            // mic for IO — no false positives from background helpers.
+            // MEETILY_CALL_DETECTION=0 still lets a power user disable it.
             if std::env::var("MEETILY_CALL_DETECTION")
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .map(|v| v == "0" || v.eq_ignore_ascii_case("false"))
                 .unwrap_or(false)
             {
-                call_detector::start_call_detector(_app.handle().clone());
+                log::info!("Call detector disabled via MEETILY_CALL_DETECTION=0");
             } else {
-                log::info!("Call detector disabled (set MEETILY_CALL_DETECTION=1 to enable)");
+                call_detector::start_call_detector(_app.handle().clone());
             }
 
             // Initialize notification system with proper defaults

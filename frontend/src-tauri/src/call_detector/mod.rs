@@ -1,51 +1,36 @@
 // Call-detection reminder.
 //
-// Polls the process list every 5 seconds for known call applications
-// (Zoom, Microsoft Teams, Webex, Discord, FaceTime, Skype). When one starts
-// running while Meetily itself is NOT recording, surfaces a reminder via:
+// Polls Core Audio every few seconds to check whether the default input
+// device (microphone) is running for any process other than ourselves.
+// When it is, surfaces a reminder via:
 //   1. tray icon — adds a "📞 Call detected — Start Recording" menu item
 //   2. OS notification — fires once per call-detected transition
 //
-// The plan called for native Core Audio APIs (kAudioHardwarePropertyProcessObjectList),
-// which is more accurate but macOS 14.4+ only and requires fragile bindings.
-// Process enumeration is unprivileged, deterministic, works on all macOS
-// versions, and covers the apps users actually want detection for.
+// We previously matched on hard-coded process names (zoom.us, msteams, …)
+// which missed browser-based meetings (Google Meet, Teams web, etc.) and
+// gave no signal for Slack huddles, Discord calls, FaceTime audio, etc.
+// `kAudioDevicePropertyDeviceIsRunningSomewhere` returns true the moment
+// any process opens the input device for IO, regardless of how it got
+// there, so it catches every real use of the mic without false positives
+// from background helpers that merely have the app launched.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Runtime};
 use tauri_plugin_notification::NotificationExt;
 use tokio::time::{sleep, Duration};
 
-/// Polling interval between checks. Short enough to feel responsive, long
-/// enough that the spawned `ps` call has negligible cost (<1 ms typical).
-const POLL_INTERVAL_SECS: u64 = 5;
+/// Polling interval between checks. The Core Audio call is essentially
+/// free (a single property read), so we can poll fast enough that the
+/// reminder feels responsive.
+const POLL_INTERVAL_SECS: u64 = 3;
 
-/// Number of consecutive positive samples needed before firing `CallStarted`.
-/// Debounces brief flicker (e.g. a call app being launched and immediately
-/// quit). 2 samples × 5 s = ≥5 s of consistent presence.
+/// Number of consecutive positive samples needed before firing.
+/// Debounces brief flicker (apps that briefly open the device during
+/// device-change probing). 2 × 3 s = ≥3 s of consistent presence.
 const DEBOUNCE_SAMPLES: u8 = 2;
 
-// All-lowercase EXACT basenames produced by `ps -axo comm=`. Substring matching
-// was too loose — e.g. "discord" matched the Discord background helper that
-// stays alive even when no call is active. We now compare the process basename
-// for exact equality to keep false positives down. Apps that keep a background
-// process running for push notifications (Discord, Skype, FaceTime) are
-// intentionally excluded.
-#[cfg(target_os = "macos")]
-const KNOWN_CALL_APPS: &[&str] = &[
-    "zoom.us",
-    "msteams",
-    "cisco webex meetings",
-    "gotomeeting",
-    "bluejeans",
-];
-
-/// Track whether the reminder has already fired for the currently-detected
-/// call, so we don't re-notify every poll tick.
 static REMINDED_FOR_CURRENT_CALL: AtomicBool = AtomicBool::new(false);
 
-/// Spawn a background tokio task that monitors call apps and updates tray +
-/// notifications. Safe to call once during app setup.
 pub fn start_call_detector<R: Runtime>(app: AppHandle<R>) {
     tauri::async_runtime::spawn(async move {
         log::info!(
@@ -58,7 +43,12 @@ pub fn start_call_detector<R: Runtime>(app: AppHandle<R>) {
         loop {
             sleep(Duration::from_secs(POLL_INTERVAL_SECS)).await;
 
-            let now_detected = scan_for_call_app();
+            // "Someone else is using the mic" = device is running AND that
+            // someone isn't us. When we're recording, the device naturally
+            // shows as running, so suppress entirely in that case.
+            let we_are_recording = crate::audio::recording_commands::is_recording().await;
+            let device_busy = scan_default_input_busy();
+            let now_detected = device_busy && !we_are_recording;
 
             match (call_active, now_detected) {
                 (false, true) => {
@@ -83,66 +73,118 @@ pub fn start_call_detector<R: Runtime>(app: AppHandle<R>) {
     });
 }
 
-/// Returns true if any of the known call-app process names is currently
-/// running. macOS-only; returns false everywhere else.
-fn scan_for_call_app() -> bool {
+/// Returns true if the default input device currently has IO running for
+/// at least one process on the system. macOS-only; no-ops elsewhere.
+fn scan_default_input_busy() -> bool {
     #[cfg(target_os = "macos")]
     {
-        use std::process::Command;
-        // `-axo comm=` prints the command (basename) of every process, no header.
-        let output = match Command::new("/bin/ps").args(["-axo", "comm="]).output() {
-            Ok(o) => o,
-            Err(e) => {
-                log::warn!("Call detector: failed to spawn ps: {}", e);
-                return false;
-            }
-        };
-        if !output.status.success() {
-            return false;
-        }
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        for line in stdout.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            // `ps -axo comm=` returns the executable basename. Take just the
-            // file name (some paths show with directories) and compare
-            // case-insensitively for exact equality against the known list.
-            let basename = trimmed
-                .rsplit('/')
-                .next()
-                .unwrap_or(trimmed)
-                .to_lowercase();
-            for app in KNOWN_CALL_APPS {
-                if basename == *app {
-                    return true;
-                }
+        match macos::default_input_is_running_somewhere() {
+            Ok(v) => v,
+            Err(status) => {
+                log::warn!("Call detector: Core Audio query failed (OSStatus {})", status);
+                false
             }
         }
-        false
     }
-
     #[cfg(not(target_os = "macos"))]
     {
         false
     }
 }
 
-async fn on_call_started<R: Runtime>(app: &AppHandle<R>) {
-    log::info!("📞 Call detected by another app");
+#[cfg(target_os = "macos")]
+mod macos {
+    use std::ffi::c_void;
+    use std::mem::size_of;
 
-    // Mark tray as call-detected and refresh the menu so the "Start Recording"
-    // item gets a 📞 hint.
+    // FourCC helper — Core Audio property selectors are packed ASCII.
+    const fn fcc(s: &[u8; 4]) -> u32 {
+        ((s[0] as u32) << 24) | ((s[1] as u32) << 16) | ((s[2] as u32) << 8) | (s[3] as u32)
+    }
+
+    // AudioObject IDs and property selectors (from CoreAudio/AudioHardware.h).
+    const K_AUDIO_OBJECT_SYSTEM_OBJECT: u32 = 1;
+    const SELECTOR_DEFAULT_INPUT: u32 = fcc(b"dIn ");
+    const SELECTOR_IS_RUNNING_SOMEWHERE: u32 = fcc(b"goin");
+    const SCOPE_GLOBAL: u32 = fcc(b"glob");
+    const ELEMENT_MAIN: u32 = 0;
+
+    #[repr(C)]
+    struct AudioObjectPropertyAddress {
+        selector: u32,
+        scope: u32,
+        element: u32,
+    }
+
+    #[link(name = "CoreAudio", kind = "framework")]
+    extern "C" {
+        fn AudioObjectGetPropertyData(
+            in_object_id: u32,
+            in_address: *const AudioObjectPropertyAddress,
+            in_qualifier_data_size: u32,
+            in_qualifier_data: *const c_void,
+            io_data_size: *mut u32,
+            out_data: *mut c_void,
+        ) -> i32;
+    }
+
+    pub fn default_input_is_running_somewhere() -> Result<bool, i32> {
+        // 1) Resolve the default input device ID.
+        let default_addr = AudioObjectPropertyAddress {
+            selector: SELECTOR_DEFAULT_INPUT,
+            scope: SCOPE_GLOBAL,
+            element: ELEMENT_MAIN,
+        };
+        let mut device_id: u32 = 0;
+        let mut size: u32 = size_of::<u32>() as u32;
+        let status = unsafe {
+            AudioObjectGetPropertyData(
+                K_AUDIO_OBJECT_SYSTEM_OBJECT,
+                &default_addr,
+                0,
+                std::ptr::null(),
+                &mut size,
+                &mut device_id as *mut u32 as *mut c_void,
+            )
+        };
+        if status != 0 {
+            return Err(status);
+        }
+        if device_id == 0 {
+            // No default input device — nothing to detect.
+            return Ok(false);
+        }
+
+        // 2) Read kAudioDevicePropertyDeviceIsRunningSomewhere (UInt32).
+        let running_addr = AudioObjectPropertyAddress {
+            selector: SELECTOR_IS_RUNNING_SOMEWHERE,
+            scope: SCOPE_GLOBAL,
+            element: ELEMENT_MAIN,
+        };
+        let mut running: u32 = 0;
+        let mut size: u32 = size_of::<u32>() as u32;
+        let status = unsafe {
+            AudioObjectGetPropertyData(
+                device_id,
+                &running_addr,
+                0,
+                std::ptr::null(),
+                &mut size,
+                &mut running as *mut u32 as *mut c_void,
+            )
+        };
+        if status != 0 {
+            return Err(status);
+        }
+        Ok(running != 0)
+    }
+}
+
+async fn on_call_started<R: Runtime>(app: &AppHandle<R>) {
+    log::info!("📞 Microphone in use by another app");
+
     crate::tray::set_call_detected(true);
     crate::tray::update_tray_menu(app);
-
-    // Don't badge the user with a notification if they're already recording —
-    // they obviously don't need a reminder.
-    if crate::audio::recording_commands::is_recording().await {
-        log::debug!("Call detected but already recording; skipping notification");
-        return;
-    }
 
     if !REMINDED_FOR_CURRENT_CALL.swap(true, Ordering::SeqCst) {
         if let Err(e) = app
@@ -160,7 +202,7 @@ async fn on_call_started<R: Runtime>(app: &AppHandle<R>) {
 }
 
 async fn on_call_ended<R: Runtime>(app: &AppHandle<R>) {
-    log::info!("📞 Call ended");
+    log::info!("📞 Microphone released");
     crate::tray::set_call_detected(false);
     crate::tray::update_tray_menu(app);
     let _ = app.emit("call-detected", false);
