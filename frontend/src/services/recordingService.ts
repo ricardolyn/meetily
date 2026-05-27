@@ -75,13 +75,14 @@ export class RecordingService {
     meetingName: string,
     projectFolder: string | null = null
   ): Promise<void> {
+    // Tauri 2 IPC convention: JS sends camelCase, Rust receives snake_case
+    // via the auto-rename. Sending snake_case keys here silently drops every
+    // argument to None on the Rust side (verified via the file logger).
     return invoke('start_recording_with_devices_and_meeting', {
-      // Keep snake_case to match the existing keys on this same call; Tauri
-      // 2 accepts both but mixing styles in one payload is confusing.
-      mic_device_name: micDeviceName,
-      system_device_name: systemDeviceName,
-      meeting_name: meetingName,
-      project_folder: projectFolder,
+      micDeviceName,
+      systemDeviceName,
+      meetingName,
+      projectFolder,
     });
   }
 
