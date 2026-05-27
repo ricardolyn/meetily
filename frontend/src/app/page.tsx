@@ -18,7 +18,10 @@ import { useRecordingStart } from '@/hooks/useRecordingStart';
 import { useRecordingStop } from '@/hooks/useRecordingStop';
 import { ProjectPicker } from '@/components/RecordingControls/ProjectPicker';
 import { LiveNotesPill } from '@/components/RecordingControls/LiveNotesPill';
+import { LiveNotesPanel } from '@/components/LiveNotes/LiveNotesPanel';
 import { useLiveNotes } from '@/hooks/useLiveNotes';
+import { useLiveNotesContext } from '@/contexts/LiveNotesContext';
+import { useHorizontalResize } from '@/hooks/useHorizontalResize';
 import { useTranscriptRecovery } from '@/hooks/useTranscriptRecovery';
 import { TranscriptRecovery } from '@/components/TranscriptRecovery';
 import { indexedDBService } from '@/services/indexedDBService';
@@ -69,6 +72,16 @@ export default function Home() {
   // to SQLite. The backend only uses it for logging; the actual LLM call
   // is purely transcript-driven.
   useLiveNotes(meetingTitle ?? null);
+
+  const { enabledForMeeting, panelMode } = useLiveNotesContext();
+  const showInlinePanel =
+    recordingState.isRecording && enabledForMeeting && panelMode === 'inline';
+  const { width: liveNotesWidth, handleProps, containerRef } = useHorizontalResize({
+    storageKey: 'meetily.liveNotes.inlineWidth',
+    defaultWidth: 360,
+    minWidth: 260,
+    minOpposite: 480,
+  });
 
   useEffect(() => {
     // Track page view
@@ -220,12 +233,31 @@ export default function Home() {
         onDelete={deleteRecoverableMeeting}
         onLoadPreview={loadMeetingTranscripts}
       />
-      <div className="flex flex-1 overflow-hidden">
-        <TranscriptPanel
-          isProcessingStop={isProcessingStop}
-          isStopping={isStopping}
-          showModal={showModal}
-        />
+      <div ref={containerRef} className="flex flex-1 overflow-hidden">
+        <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+          <TranscriptPanel
+            isProcessingStop={isProcessingStop}
+            isStopping={isStopping}
+            showModal={showModal}
+          />
+        </div>
+
+        {showInlinePanel && (
+          <>
+            <div
+              {...handleProps}
+              className="w-1 cursor-col-resize bg-gray-200 hover:bg-blue-300 transition-colors"
+              role="separator"
+              aria-orientation="vertical"
+            />
+            <div
+              className="flex flex-col bg-white border-l border-gray-200"
+              style={{ width: liveNotesWidth, flexShrink: 0 }}
+            >
+              <LiveNotesPanel inline />
+            </div>
+          </>
+        )}
 
         {/* Recording controls - only show when permissions are granted or already recording and not showing status messages */}
         {(hasMicrophone || isRecording) &&

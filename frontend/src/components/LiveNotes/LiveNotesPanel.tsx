@@ -2,7 +2,11 @@
 
 import { useEffect, useState } from 'react';
 import { emit, listen } from '@tauri-apps/api/event';
-import { Loader2, RefreshCw, X } from 'lucide-react';
+import { Loader2, PanelRightClose, RefreshCw, Square, X } from 'lucide-react';
+import {
+  useLiveNotesContext,
+  type LiveNotesStatus,
+} from '@/contexts/LiveNotesContext';
 
 interface LiveNotes {
   right_now: string;
@@ -11,20 +15,42 @@ interface LiveNotes {
   generated_at: string;
 }
 
-type Status =
-  | { kind: 'idle' }
-  | { kind: 'refreshing' }
-  | { kind: 'ok'; at: string }
-  | { kind: 'error'; message: string };
+interface Props {
+  /** When true, runs inside the main window (no Tauri events needed). */
+  inline?: boolean;
+}
 
-export function LiveNotesPanel() {
+export function LiveNotesPanel({ inline = false }: Props) {
+  if (inline) return <InlineLiveNotesPanel />;
+  return <FloatingLiveNotesPanel />;
+}
+
+function InlineLiveNotesPanel() {
+  const { latest, status, refresh, setEnabledForMeeting, setPanelMode } =
+    useLiveNotesContext();
+
+  return (
+    <PanelChrome
+      status={status}
+      onRefresh={refresh}
+      onPause={() => setEnabledForMeeting(false)}
+      extraAction={{
+        icon: <Square className="w-3.5 h-3.5" />,
+        title: 'Pop out to floating window',
+        onClick: () => setPanelMode('floating'),
+      }}
+      notes={latest}
+    />
+  );
+}
+
+function FloatingLiveNotesPanel() {
   const [notes, setNotes] = useState<LiveNotes | null>(null);
-  const [status, setStatus] = useState<Status>({ kind: 'idle' });
+  const [status, setStatus] = useState<LiveNotesStatus>({ kind: 'idle' });
 
   useEffect(() => {
-    // `cancelled` guards against unmounting before the async listen()
-    // calls resolve — otherwise the cleanup runs on a partial array and
-    // any not-yet-resolved listener leaks.
+    // `cancelled` guards against unmounting before listen() resolves,
+    // otherwise the cleanup runs on a partial array and leaks listeners.
     let cancelled = false;
     const unlistens: Array<() => void> = [];
     (async () => {
@@ -53,16 +79,30 @@ export function LiveNotesPanel() {
     };
   }, []);
 
-  async function refreshNow() {
-    // Ask the main window's useLiveNotes hook to fire a tick out-of-band.
-    await emit('live-notes-refresh-request').catch(() => {});
-  }
+  return (
+    <PanelChrome
+      status={status}
+      onRefresh={() => { void emit('live-notes-refresh-request').catch(() => {}); }}
+      onPause={() => { void emit('live-notes-pause-request').catch(() => {}); }}
+      extraAction={{
+        icon: <PanelRightClose className="w-3.5 h-3.5" />,
+        title: 'Dock back to side panel',
+        onClick: () => { void emit('live-notes-dock-request').catch(() => {}); },
+      }}
+      notes={notes}
+    />
+  );
+}
 
-  async function pauseForMeeting() {
-    // Tell the main window to disable live notes for the current meeting.
-    await emit('live-notes-pause-request').catch(() => {});
-  }
+interface PanelChromeProps {
+  status: LiveNotesStatus;
+  onRefresh: () => void;
+  onPause: () => void;
+  extraAction?: { icon: React.ReactNode; title: string; onClick: () => void };
+  notes: LiveNotes | null;
+}
 
+function PanelChrome({ status, onRefresh, onPause, extraAction, notes }: PanelChromeProps) {
   return (
     <div className="flex flex-col h-full text-sm">
       <header className="flex items-center gap-2 px-3 py-2 border-b border-gray-200 bg-gray-50">
@@ -79,16 +119,25 @@ export function LiveNotesPanel() {
           )}
         </span>
         <button
-          onClick={refreshNow}
+          onClick={onRefresh}
           className="text-gray-500 hover:text-gray-800"
           title="Refresh now"
         >
           <RefreshCw className="w-3.5 h-3.5" />
         </button>
+        {extraAction && (
+          <button
+            onClick={extraAction.onClick}
+            className="text-gray-500 hover:text-gray-800"
+            title={extraAction.title}
+          >
+            {extraAction.icon}
+          </button>
+        )}
         <button
-          onClick={pauseForMeeting}
+          onClick={onPause}
           className="text-gray-500 hover:text-gray-800"
-          title="Pause for this meeting"
+          title="Turn off for this meeting"
         >
           <X className="w-3.5 h-3.5" />
         </button>

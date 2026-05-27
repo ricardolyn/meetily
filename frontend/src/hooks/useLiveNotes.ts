@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { emit, listen } from '@tauri-apps/api/event';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { useTranscripts } from '@/contexts/TranscriptContext';
@@ -14,21 +14,30 @@ import {
 /**
  * Drives the live-notes lifecycle from the main window. Reads recording
  * state + per-meeting override + persisted settings, fires the LLM call
- * on an interval, broadcasts results to the floating window.
+ * on an interval, broadcasts results to both the inline panel (via
+ * context) and the floating window (via events).
  */
 export function useLiveNotes(meetingId: string | null) {
   const { transcripts } = useTranscripts();
   const { isRecording, isPaused } = useRecordingState();
 
-  const { enabledForMeeting, setEnabledForMeeting, resetForMeeting, setLatest, latest } =
-    useLiveNotesContext();
+  const {
+    enabledForMeeting,
+    setEnabledForMeeting,
+    resetForMeeting,
+    setLatest,
+    latest,
+    setStatus,
+    panelMode,
+    setPanelMode,
+    registerRefreshFn,
+  } = useLiveNotesContext();
 
   const inFlightRef = useRef(false);
   const lastTranscriptCountRef = useRef(0);
   const settingsRef = useRef<LiveNotesSettings | null>(null);
-  // Mirror reactive state into refs so the tick can read fresh values
-  // without putting them on the effect's dep array — otherwise the
-  // interval would be torn down and re-created on every transcript update.
+  // Refs mirror reactive state so the tick reads fresh values without
+  // re-creating the interval on every transcript update.
   const latestRef = useRef<LiveNotes | null>(null);
   const transcriptsRef = useRef(transcripts);
   const isPausedRef = useRef(isPaused);
@@ -36,18 +45,14 @@ export function useLiveNotes(meetingId: string | null) {
   transcriptsRef.current = transcripts;
   isPausedRef.current = isPaused;
 
-  // Load settings once (refreshed on each recording start in case the
-  // user changed them in Settings since this hook mounted).
   useEffect(() => {
     liveNotesService.getSettings().then(s => {
       settingsRef.current = s;
     });
   }, []);
 
-  // When a new recording starts, reset to the global default.
   useEffect(() => {
     if (isRecording) {
-      // Re-read settings in case the user changed enabledByDefault since mount.
       liveNotesService.getSettings().then(s => {
         settingsRef.current = s;
         resetForMeeting(s.enabledByDefault);
@@ -56,13 +61,15 @@ export function useLiveNotes(meetingId: string | null) {
     }
   }, [isRecording, resetForMeeting]);
 
-  // Show/hide the floating window in lockstep with enabled+recording.
+  // Show the floating window only when the user has explicitly chosen
+  // floating mode AND the feature is on for the current meeting. The
+  // inline panel is rendered directly inside the main window by page.tsx.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const win = await WebviewWindow.getByLabel('live-notes');
       if (!win || cancelled) return;
-      if (isRecording && enabledForMeeting) {
+      if (isRecording && enabledForMeeting && panelMode === 'floating') {
         await win.show();
       } else {
         await win.hide();
@@ -71,15 +78,22 @@ export function useLiveNotes(meetingId: string | null) {
     return () => {
       cancelled = true;
     };
-  }, [isRecording, enabledForMeeting]);
+  }, [isRecording, enabledForMeeting, panelMode]);
 
-  // The actual tick.
-  // NOTE: `transcripts` / `isPaused` deliberately NOT in the dep array — we
-  // read them through refs above so the interval is established once per
-  // recording (not re-created on every transcript). The no-new-transcripts
-  // guard inside the tick handles the freshness check.
-  // TODO(v2): re-read settings on a "live-notes-settings-changed" event so
-  // interval changes mid-recording apply without restarting the recording.
+  // Stable refresh trigger exposed via context. The tick fn is rebuilt
+  // each time the effect re-runs; we update tickRef so the trigger
+  // always calls the latest closure.
+  const tickRef = useRef<() => Promise<void>>(async () => {});
+  const refresh = useCallback(() => {
+    void tickRef.current();
+  }, []);
+  useEffect(() => {
+    registerRefreshFn(refresh);
+    return () => registerRefreshFn(null);
+  }, [refresh, registerRefreshFn]);
+
+  // The actual tick. NOTE: `transcripts`/`isPaused` deliberately not in
+  // the dep array; refs above give us freshness without churn.
   useEffect(() => {
     if (!isRecording || !enabledForMeeting || !meetingId) return;
     const intervalMs = (settingsRef.current?.intervalSeconds ?? 60) * 1000;
@@ -87,37 +101,43 @@ export function useLiveNotes(meetingId: string | null) {
 
     const tick = async () => {
       if (!mounted) return;
-      if (inFlightRef.current) return;                    // single-flight
-      if (isPausedRef.current) return;                     // skip while paused
+      if (inFlightRef.current) return;
+      if (isPausedRef.current) return;
       const currentTranscripts = transcriptsRef.current;
       if (currentTranscripts.length === lastTranscriptCountRef.current) return;
       const cfg = await resolveModelConfig();
       if (!cfg) {
-        await emit('live-notes-error', 'No LLM provider configured');
+        const msg = 'No LLM provider configured';
+        setStatus({ kind: 'error', message: msg });
+        await emit('live-notes-error', msg);
         return;
       }
       const recent = buildRecentTranscriptText(currentTranscripts, intervalMs);
       if (!recent.trim()) return;
       inFlightRef.current = true;
+      setStatus({ kind: 'refreshing' });
       await emit('live-notes-refreshing');
       try {
         const result = await liveNotesService.generate(meetingId, recent, latestRef.current, cfg);
         if (!mounted) return;
         setLatest(result);
+        setStatus({ kind: 'ok', at: result.generated_at });
         lastTranscriptCountRef.current = currentTranscripts.length;
         await emit('live-notes-update', result);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         console.error('[live-notes] tick failed:', msg);
+        setStatus({ kind: 'error', message: msg });
         await emit('live-notes-error', msg);
       } finally {
         inFlightRef.current = false;
       }
     };
+    tickRef.current = tick;
 
     const handle = window.setInterval(tick, intervalMs);
-    // Floating-window-triggered manual refresh and pause. `mounted` gate
-    // covers the race where the listen() Promise resolves after teardown.
+    // Floating-window-triggered manual refresh and pause; mounted gate
+    // covers the race where listen() resolves after teardown.
     const unlistenRefreshP = listen<void>('live-notes-refresh-request', () => {
       if (!mounted) return;
       void tick();
@@ -126,21 +146,25 @@ export function useLiveNotes(meetingId: string | null) {
       if (!mounted) return;
       setEnabledForMeeting(false);
     });
+    const unlistenDockP = listen<void>('live-notes-dock-request', () => {
+      if (!mounted) return;
+      setPanelMode('inline');
+    });
 
     return () => {
       mounted = false;
       window.clearInterval(handle);
       unlistenRefreshP.then(u => u()).catch(() => {});
       unlistenPauseP.then(u => u()).catch(() => {});
+      unlistenDockP.then(u => u()).catch(() => {});
     };
-  }, [isRecording, enabledForMeeting, meetingId, setLatest, setEnabledForMeeting]);
+  }, [isRecording, enabledForMeeting, meetingId, setLatest, setEnabledForMeeting, setStatus, setPanelMode]);
 }
 
 function buildRecentTranscriptText(
   transcripts: Array<{ text: string; audio_start_time?: number; speaker?: string }>,
   intervalMs: number
 ): string {
-  // Window = min(intervalMs * 3, 5 minutes), per the design spec.
   const windowMs = Math.min(intervalMs * 3, 5 * 60 * 1000);
   const last = transcripts[transcripts.length - 1];
   if (!last || last.audio_start_time === undefined) {
@@ -171,7 +195,6 @@ async function resolveModelConfig(): Promise<LiveNotesModelConfig | null> {
     if (!s.model) return null;
     return { provider: s.provider, model: s.model };
   }
-  // Inherit from saved-summary model config (api_get_model_config).
   const { invoke } = await import('@tauri-apps/api/core');
   const config: any = await invoke('api_get_model_config').catch(() => null);
   if (!config || !config.provider || !config.model) return null;

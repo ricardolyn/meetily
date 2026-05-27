@@ -9,6 +9,7 @@ import AnalyticsProvider from '@/components/AnalyticsProvider'
 import { Toaster, toast } from 'sonner'
 import "sonner/dist/styles.css"
 import { useState, useEffect, useCallback } from 'react'
+import { usePathname } from 'next/navigation'
 import { listen, UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -70,6 +71,12 @@ export default function RootLayout({
 }: {
   children: React.ReactNode
 }) {
+  const pathname = usePathname()
+  // The floating live-notes window loads /live-notes through this same
+  // root layout. Skip the main app shell (sidebar, onboarding, listeners)
+  // for that route so the window renders just its panel content.
+  const isStandaloneWindow = pathname === '/live-notes'
+
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [onboardingCompleted, setOnboardingCompleted] = useState(false)
 
@@ -79,6 +86,7 @@ export default function RootLayout({
   const [importFilePath, setImportFilePath] = useState<string | null>(null)
 
   useEffect(() => {
+    if (isStandaloneWindow) return
     // Check onboarding status first
     invoke<{ completed: boolean } | null>('get_onboarding_status')
       .then((status) => {
@@ -98,7 +106,7 @@ export default function RootLayout({
         setShowOnboarding(true)
         setOnboardingCompleted(false)
       })
-  }, [])
+  }, [isStandaloneWindow])
 
   // Disable context menu in production
   useEffect(() => {
@@ -109,6 +117,7 @@ export default function RootLayout({
     }
   }, []);
   useEffect(() => {
+    if (isStandaloneWindow) return
     // Listen for tray recording toggle request
     const unlisten = listen('request-recording-toggle', () => {
       console.log('[Layout] Received request-recording-toggle from tray');
@@ -127,7 +136,7 @@ export default function RootLayout({
     return () => {
       unlisten.then(fn => fn());
     };
-  }, [showOnboarding]);
+  }, [showOnboarding, isStandaloneWindow]);
 
   // Handle file drop for audio import
   const handleFileDrop = useCallback((paths: string[]) => {
@@ -160,6 +169,7 @@ export default function RootLayout({
 
   // Listen for drag-drop events
   useEffect(() => {
+    if (isStandaloneWindow) return;
     if (showOnboarding) return; // Don't handle drops during onboarding
 
     const unlisteners: UnlistenFn[] = [];
@@ -208,7 +218,7 @@ export default function RootLayout({
       cleanedUpRef.current = true;
       unlisteners.forEach((unlisten) => unlisten());
     };
-  }, [showOnboarding, handleFileDrop]);
+  }, [showOnboarding, handleFileDrop, isStandaloneWindow]);
 
   // Handle import dialog close
   const handleImportDialogClose = useCallback((open: boolean) => {
@@ -230,6 +240,16 @@ export default function RootLayout({
     setOnboardingCompleted(true)
     // Optionally reload the window to ensure all state is fresh
     window.location.reload()
+  }
+
+  if (isStandaloneWindow) {
+    return (
+      <html lang="en">
+        <body className={`${sourceSans3.variable} font-sans antialiased`}>
+          {children}
+        </body>
+      </html>
+    )
   }
 
   return (

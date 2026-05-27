@@ -1,8 +1,6 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { emit } from '@tauri-apps/api/event';
-import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { ChevronDown, Sparkles } from 'lucide-react';
 import {
   DropdownMenu,
@@ -19,7 +17,8 @@ interface Props {
 }
 
 export function LiveNotesPill({ isRecording }: Props) {
-  const { enabledForMeeting, setEnabledForMeeting } = useLiveNotesContext();
+  const { enabledForMeeting, setEnabledForMeeting, panelMode, setPanelMode, refresh } =
+    useLiveNotesContext();
   const [intervalLabel, setIntervalLabel] = useState<string>('1m');
 
   useEffect(() => {
@@ -27,14 +26,6 @@ export function LiveNotesPill({ isRecording }: Props) {
   }, []);
 
   if (!isRecording) return null;
-
-  async function refreshNow() {
-    await emit('live-notes-refresh-request');
-  }
-  async function openWindow() {
-    const win = await WebviewWindow.getByLabel('live-notes');
-    if (win) await win.show();
-  }
 
   return (
     <div className="inline-flex items-center gap-1">
@@ -61,12 +52,21 @@ export function LiveNotesPill({ isRecording }: Props) {
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start">
-          <DropdownMenuItem onSelect={refreshNow} disabled={!enabledForMeeting}>
+          <DropdownMenuItem onSelect={refresh} disabled={!enabledForMeeting}>
             Refresh now
           </DropdownMenuItem>
-          <DropdownMenuItem onSelect={openWindow}>
-            Open floating window
-          </DropdownMenuItem>
+          {panelMode === 'inline' ? (
+            <DropdownMenuItem
+              onSelect={() => setPanelMode('floating')}
+              disabled={!enabledForMeeting}
+            >
+              Pop out to floating window
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuItem onSelect={() => setPanelMode('inline')}>
+              Dock to side panel
+            </DropdownMenuItem>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>

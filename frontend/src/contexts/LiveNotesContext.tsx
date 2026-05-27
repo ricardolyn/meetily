@@ -1,18 +1,28 @@
 'use client';
 
-import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
 import type { LiveNotes } from '@/services/liveNotesService';
 
+export type LiveNotesStatus =
+  | { kind: 'idle' }
+  | { kind: 'refreshing' }
+  | { kind: 'ok'; at: string }
+  | { kind: 'error'; message: string };
+
+export type LiveNotesPanelMode = 'inline' | 'floating';
+
 interface LiveNotesContextValue {
-  /** True if live notes should run for the current meeting. */
   enabledForMeeting: boolean;
-  /** Override switch (only meaningful during an active recording). */
   setEnabledForMeeting: (v: boolean) => void;
-  /** Reset to "use the global default" — called when a recording starts. */
   resetForMeeting: (defaultEnabled: boolean) => void;
-  /** Latest result, shared between RecordingControls and the floating window. */
   latest: LiveNotes | null;
   setLatest: (n: LiveNotes | null) => void;
+  status: LiveNotesStatus;
+  setStatus: (s: LiveNotesStatus) => void;
+  panelMode: LiveNotesPanelMode;
+  setPanelMode: (m: LiveNotesPanelMode) => void;
+  refresh: () => void;
+  registerRefreshFn: (fn: (() => void) | null) => void;
 }
 
 const LiveNotesContext = createContext<LiveNotesContextValue | null>(null);
@@ -26,15 +36,41 @@ export function useLiveNotesContext(): LiveNotesContextValue {
 export function LiveNotesProvider({ children }: { children: React.ReactNode }) {
   const [enabledForMeeting, setEnabledForMeeting] = useState(false);
   const [latest, setLatest] = useState<LiveNotes | null>(null);
+  const [status, setStatus] = useState<LiveNotesStatus>({ kind: 'idle' });
+  const [panelMode, setPanelMode] = useState<LiveNotesPanelMode>('inline');
+
+  // Held in a ref so the hook can update it without forcing a re-render of
+  // consumers, and so calling refresh() before the hook mounts is a no-op
+  // instead of a crash.
+  const refreshFnRef = useRef<(() => void) | null>(null);
+  const refresh = useCallback(() => {
+    refreshFnRef.current?.();
+  }, []);
+  const registerRefreshFn = useCallback((fn: (() => void) | null) => {
+    refreshFnRef.current = fn;
+  }, []);
 
   const resetForMeeting = useCallback((defaultEnabled: boolean) => {
     setEnabledForMeeting(defaultEnabled);
     setLatest(null);
+    setStatus({ kind: 'idle' });
   }, []);
 
   const value = useMemo<LiveNotesContextValue>(
-    () => ({ enabledForMeeting, setEnabledForMeeting, resetForMeeting, latest, setLatest }),
-    [enabledForMeeting, resetForMeeting, latest]
+    () => ({
+      enabledForMeeting,
+      setEnabledForMeeting,
+      resetForMeeting,
+      latest,
+      setLatest,
+      status,
+      setStatus,
+      panelMode,
+      setPanelMode,
+      refresh,
+      registerRefreshFn,
+    }),
+    [enabledForMeeting, resetForMeeting, latest, status, panelMode, refresh, registerRefreshFn]
   );
 
   return <LiveNotesContext.Provider value={value}>{children}</LiveNotesContext.Provider>;
