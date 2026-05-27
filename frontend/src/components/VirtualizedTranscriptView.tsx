@@ -69,6 +69,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
     timestamp,
     text,
     confidence,
+    speaker,
     isStreaming,
     showConfidence,
 }: {
@@ -76,6 +77,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
     timestamp: number;
     text: string;
     confidence?: number;
+    speaker?: string;
     isStreaming: boolean;
     showConfidence: boolean;
 }) {
@@ -96,6 +98,18 @@ const TranscriptSegment = memo(function TranscriptSegment({
                         )}
                     </TooltipContent>
                 </Tooltip>
+                {speaker && (
+                    <span
+                        className={`mt-1 inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide flex-shrink-0 ${
+                            speaker === 'me'
+                                ? 'bg-blue-100 text-blue-700'
+                                : 'bg-amber-100 text-amber-700'
+                        }`}
+                        title={speaker === 'me' ? 'You (microphone)' : 'Other party (system audio)'}
+                    >
+                        {speaker === 'me' ? 'Me' : 'Others'}
+                    </span>
+                )}
                 <div className="flex-1">
                     {isStreaming ? (
                         <div className="bg-gray-100 border border-gray-200 rounded-lg px-3 py-2">
@@ -294,6 +308,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         timestamp={segment.timestamp}
                                         text={getDisplayText(segment)}
                                         confidence={segment.confidence}
+                                        speaker={segment.speaker}
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
                                     />
@@ -350,6 +365,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         timestamp={segment.timestamp}
                                         text={getDisplayText(segment)}
                                         confidence={segment.confidence}
+                                        speaker={segment.speaker}
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
                                     />
