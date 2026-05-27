@@ -116,6 +116,7 @@ impl RecordingManager {
             mic_kind,
             sys_name,
             sys_kind,
+            system_device.is_some(),
         )?;
 
         // Give the pipeline a moment to fully initialize before starting streams

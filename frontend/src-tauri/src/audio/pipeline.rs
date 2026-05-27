@@ -729,8 +729,11 @@ pub struct AudioPipeline {
     // Per-channel VAD so speech detection runs separately on the mic and on
     // the system streams. This is what gives transcripts a "me" vs "others"
     // attribution downstream (channel_type carried on the AudioChunk).
+    // `vad_processor_system` is None when no system-audio device is configured
+    // — skipping VAD + a Whisper call per window on the silent system buffer
+    // roughly halves transcription compute for mic-only sessions.
     vad_processor_mic: ContinuousVadProcessor,
-    vad_processor_system: ContinuousVadProcessor,
+    vad_processor_system: Option<ContinuousVadProcessor>,
     sample_rate: u32,
     chunk_id_counter: u64,
     // Performance optimization: reduce logging frequency
@@ -756,6 +759,7 @@ impl AudioPipeline {
         mic_device_kind: super::device_detection::InputDeviceKind,
         system_device_name: String,
         system_device_kind: super::device_detection::InputDeviceKind,
+        system_audio_enabled: bool,
     ) -> Self {
         // Log device characteristics for adaptive buffering
         info!("🎛️ AudioPipeline initializing with device characteristics:");
@@ -788,15 +792,20 @@ impl AudioPipeline {
                 panic!("VAD processor creation failed: {}", e);
             }
         };
-        let vad_processor_system = match ContinuousVadProcessor::new(sample_rate, redemption_time) {
-            Ok(processor) => {
-                info!("VAD pipeline (system): segments sent to transcription as DeviceType::System (Others)");
-                processor
+        let vad_processor_system = if system_audio_enabled {
+            match ContinuousVadProcessor::new(sample_rate, redemption_time) {
+                Ok(processor) => {
+                    info!("VAD pipeline (system): segments sent to transcription as DeviceType::System (Others)");
+                    Some(processor)
+                }
+                Err(e) => {
+                    error!("Failed to create system VAD processor: {}", e);
+                    panic!("VAD processor creation failed: {}", e);
+                }
             }
-            Err(e) => {
-                error!("Failed to create system VAD processor: {}", e);
-                panic!("VAD processor creation failed: {}", e);
-            }
+        } else {
+            info!("System audio disabled — skipping system VAD/transcription path");
+            None
         };
 
         // Initialize professional audio mixing components
@@ -905,14 +914,16 @@ impl AudioPipeline {
                                 &mut self.chunk_id_counter,
                                 "mic",
                             );
-                            run_vad_for_channel(
-                                &mut self.vad_processor_system,
-                                &sys_window,
-                                DeviceType::System,
-                                &self.transcription_sender,
-                                &mut self.chunk_id_counter,
-                                "system",
-                            );
+                            if let Some(ref mut sys_vad) = self.vad_processor_system {
+                                run_vad_for_channel(
+                                    sys_vad,
+                                    &sys_window,
+                                    DeviceType::System,
+                                    &self.transcription_sender,
+                                    &mut self.chunk_id_counter,
+                                    "system",
+                                );
+                            }
 
                             // STEP 4: Send mixed audio for recording (WAV file)
                             if let Some(ref sender) = self.recording_sender_for_mixed {
@@ -958,13 +969,15 @@ impl AudioPipeline {
             &mut self.chunk_id_counter,
             "mic",
         );
-        flush_vad_to_transcription(
-            &mut self.vad_processor_system,
-            DeviceType::System,
-            &self.transcription_sender,
-            &mut self.chunk_id_counter,
-            "system",
-        );
+        if let Some(ref mut sys_vad) = self.vad_processor_system {
+            flush_vad_to_transcription(
+                sys_vad,
+                DeviceType::System,
+                &self.transcription_sender,
+                &mut self.chunk_id_counter,
+                "system",
+            );
+        }
 
         Ok(())
     }
@@ -1040,6 +1053,7 @@ impl AudioPipelineManager {
         mic_device_kind: super::device_detection::InputDeviceKind,
         system_device_name: String,
         system_device_kind: super::device_detection::InputDeviceKind,
+        system_audio_enabled: bool,
     ) -> Result<()> {
         // Log device information for adaptive buffering
         info!("🎙️ Starting pipeline with device info:");
@@ -1063,6 +1077,7 @@ impl AudioPipelineManager {
             mic_device_kind,
             system_device_name,
             system_device_kind,
+            system_audio_enabled,
         );
 
         // CRITICAL FIX: Connect recording sender to receive pre-mixed audio
