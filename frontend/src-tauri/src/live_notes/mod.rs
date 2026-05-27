@@ -79,8 +79,24 @@ pub async fn api_generate_live_notes<R: Runtime>(
         None,
     );
 
+    log_info!(
+        "Live notes: dispatching to {:?} (model={}, has_api_key={}, has_ollama_endpoint={}, prompt_chars={})",
+        provider,
+        model_config.model,
+        model_config.api_key.as_deref().map(|k| !k.is_empty()).unwrap_or(false),
+        model_config.ollama_endpoint.is_some(),
+        user_prompt.len(),
+    );
+
     let raw = match timeout(LLM_CALL_TIMEOUT, call_future).await {
-        Ok(Ok(s)) => s,
+        Ok(Ok(s)) => {
+            log_info!(
+                "Live notes: LLM responded with {} chars. First 200: {}",
+                s.len(),
+                &s[..s.len().min(200)]
+            );
+            s
+        }
         Ok(Err(e)) => {
             log_error!("Live notes LLM call failed: {}", e);
             return Err(format!("LLM call failed: {}", e));
@@ -91,7 +107,21 @@ pub async fn api_generate_live_notes<R: Runtime>(
         }
     };
 
-    parse_llm_output(&raw)
+    match parse_llm_output(&raw) {
+        Ok(notes) => {
+            log_info!(
+                "Live notes: parsed OK — right_now_chars={}, asked={}, actions={}",
+                notes.right_now.len(),
+                notes.asked_of_you.len(),
+                notes.action_items.len(),
+            );
+            Ok(notes)
+        }
+        Err(e) => {
+            log_error!("Live notes: parse failed — {}. Full LLM output:\n{}", e, raw);
+            Err(e)
+        }
+    }
 }
 
 fn parse_provider(name: &str) -> Result<LLMProvider, String> {
@@ -143,8 +173,27 @@ fn parse_llm_output(raw: &str) -> Result<LiveNotes, String> {
         .trim_end_matches("```")
         .trim();
 
-    let parsed: serde_json::Value = serde_json::from_str(cleaned)
-        .map_err(|e| format!("LLM output is not valid JSON: {} (raw: {})", e, &raw[..raw.len().min(200)]))?;
+    // Local models frequently emit prose preambles like "Here is the JSON
+    // object: { ... }" or trailing explanations. Fall back to extracting
+    // the largest balanced `{ ... }` block before giving up.
+    let parsed: serde_json::Value = match serde_json::from_str(cleaned) {
+        Ok(v) => v,
+        Err(_) => {
+            let json_slice = extract_json_object(cleaned).ok_or_else(|| {
+                format!(
+                    "LLM output contained no JSON object (raw: {})",
+                    &raw[..raw.len().min(200)]
+                )
+            })?;
+            serde_json::from_str(json_slice).map_err(|e| {
+                format!(
+                    "LLM output is not valid JSON: {} (raw: {})",
+                    e,
+                    &raw[..raw.len().min(200)]
+                )
+            })?
+        }
+    };
 
     let right_now = parsed
         .get("right_now")
@@ -179,4 +228,40 @@ fn parse_llm_output(raw: &str) -> Result<LiveNotes, String> {
         action_items,
         generated_at: Utc::now(),
     })
+}
+
+/// Find the first balanced `{ ... }` block in `s`, respecting nesting and
+/// double-quoted strings. Returns the slice including the braces.
+fn extract_json_object(s: &str) -> Option<&str> {
+    let bytes = s.as_bytes();
+    let start = bytes.iter().position(|&b| b == b'{')?;
+    let mut depth: i32 = 0;
+    let mut in_string = false;
+    let mut escape = false;
+    for (i, &b) in bytes.iter().enumerate().skip(start) {
+        if escape {
+            escape = false;
+            continue;
+        }
+        if in_string {
+            match b {
+                b'\\' => escape = true,
+                b'"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_string = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&s[start..=i]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
