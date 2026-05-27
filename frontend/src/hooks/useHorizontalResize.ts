@@ -43,6 +43,12 @@ export function useHorizontalResize({
     return Number.isFinite(parsed) && parsed > 0 ? parsed : defaultWidth;
   });
   const draggingRef = useRef(false);
+  // Mirror width into a ref so the persist effect doesn't need `width` in
+  // its deps — otherwise the listeners get torn down + re-added on every
+  // mousemove, opening a small window where a native mouseup is missed
+  // and the cursor + userSelect stay stuck.
+  const widthRef = useRef(width);
+  widthRef.current = width;
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -69,7 +75,7 @@ export function useHorizontalResize({
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
       try {
-        window.localStorage.setItem(storageKey, String(Math.round(width)));
+        window.localStorage.setItem(storageKey, String(Math.round(widthRef.current)));
       } catch {
         // Ignore quota / SecurityError; width still works in-session.
       }
@@ -80,7 +86,7 @@ export function useHorizontalResize({
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
-  }, [minWidth, minOpposite, storageKey, width]);
+  }, [minWidth, minOpposite, storageKey]);
 
   return { width, handleProps: { onMouseDown }, containerRef };
 }

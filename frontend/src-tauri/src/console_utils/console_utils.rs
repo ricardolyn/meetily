@@ -30,9 +30,11 @@ pub fn show_console() -> Result<String, String> {
             if AllocConsole() == 0 {
                 return Err("Failed to allocate console".to_string());
             }
-            // Reinitialize stdout, stdin, stderr for the new console
+            // Reinitialize stdout, stdin, stderr for the new console.
+            // try_init() because tauri-plugin-log already owns the global
+            // logger from app startup; a second init() would panic.
             std::env::set_var("RUST_LOG", "info");
-            env_logger::init();
+            let _ = env_logger::try_init();
         } else {
             // Show existing console window
             ShowWindow(console_window, SW_SHOW);

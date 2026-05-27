@@ -93,7 +93,7 @@ pub async fn api_generate_live_notes<R: Runtime>(
             log_info!(
                 "Live notes: LLM responded with {} chars. First 200: {}",
                 s.len(),
-                &s[..s.len().min(200)]
+                head_chars(&s, 200)
             );
             s
         }
@@ -182,14 +182,14 @@ fn parse_llm_output(raw: &str) -> Result<LiveNotes, String> {
             let json_slice = extract_json_object(cleaned).ok_or_else(|| {
                 format!(
                     "LLM output contained no JSON object (raw: {})",
-                    &raw[..raw.len().min(200)]
+                    head_chars(raw, 200)
                 )
             })?;
             serde_json::from_str(json_slice).map_err(|e| {
                 format!(
                     "LLM output is not valid JSON: {} (raw: {})",
                     e,
-                    &raw[..raw.len().min(200)]
+                    head_chars(raw, 200)
                 )
             })?
         }
@@ -228,6 +228,16 @@ fn parse_llm_output(raw: &str) -> Result<LiveNotes, String> {
         action_items,
         generated_at: Utc::now(),
     })
+}
+
+/// Take at most `n` chars from `s` without slicing inside a multi-byte
+/// UTF-8 codepoint. `&s[..n]` panics if byte index `n` lands inside a
+/// codepoint (emoji, accented letter, CJK, etc.).
+fn head_chars(s: &str, n: usize) -> &str {
+    match s.char_indices().nth(n) {
+        Some((i, _)) => &s[..i],
+        None => s,
+    }
 }
 
 /// Find the first balanced `{ ... }` block in `s`, respecting nesting and
