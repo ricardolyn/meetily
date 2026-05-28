@@ -198,6 +198,21 @@ async function resolveModelConfig(): Promise<LiveNotesModelConfig | null> {
   const { invoke } = await import('@tauri-apps/api/core');
   const config: any = await invoke('api_get_model_config').catch(() => null);
   if (!config || !config.provider || !config.model) return null;
+
+  // For custom-openai the endpoint + API key + model live in a separate
+  // JSON row, not in api_get_model_config's response. Fetch it here so the
+  // inherit path can drive a custom OpenAI-compatible proxy.
+  if (config.provider === 'custom-openai') {
+    const custom: any = await invoke('api_get_custom_openai_config').catch(() => null);
+    if (!custom || !custom.endpoint || !custom.model) return null;
+    return {
+      provider: 'custom-openai',
+      model: custom.model,
+      api_key: custom.apiKey ?? undefined,
+      custom_openai_endpoint: custom.endpoint,
+    };
+  }
+
   return {
     provider: config.provider,
     model: config.model,

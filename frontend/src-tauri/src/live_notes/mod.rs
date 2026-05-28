@@ -27,13 +27,15 @@ pub struct LiveNotes {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct LiveNotesModelConfig {
-    /// e.g. "ollama", "claude", "openai", "groq", "openrouter".
+    /// e.g. "ollama", "claude", "openai", "groq", "openrouter", "custom-openai".
     pub provider: String,
     pub model: String,
     #[serde(default)]
     pub api_key: Option<String>,
     #[serde(default)]
     pub ollama_endpoint: Option<String>,
+    #[serde(default)]
+    pub custom_openai_endpoint: Option<String>,
 }
 
 #[tauri::command]
@@ -45,11 +47,12 @@ pub async fn api_generate_live_notes<R: Runtime>(
     model_config: LiveNotesModelConfig,
 ) -> Result<LiveNotes, String> {
     log_info!(
-        "api_generate_live_notes called: meeting_id={}, transcripts_chars={}, provider={}, model={}",
+        "api_generate_live_notes called: meeting_id={}, transcripts_chars={}, provider={}, model={}, has_custom_endpoint={}",
         meeting_id,
         recent_transcripts.len(),
         model_config.provider,
-        model_config.model
+        model_config.model,
+        model_config.custom_openai_endpoint.as_deref().map(|s| !s.is_empty()).unwrap_or(false),
     );
 
     if recent_transcripts.trim().is_empty() {
@@ -71,7 +74,7 @@ pub async fn api_generate_live_notes<R: Runtime>(
         &system_prompt,
         &user_prompt,
         model_config.ollama_endpoint.as_deref(),
-        None,
+        model_config.custom_openai_endpoint.as_deref(),
         Some(700),
         Some(0.2),
         Some(0.9),

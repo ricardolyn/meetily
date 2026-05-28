@@ -18,6 +18,7 @@ export interface LiveNotesModelConfig {
   model: string;
   api_key?: string;
   ollama_endpoint?: string;
+  custom_openai_endpoint?: string;
 }
 
 export interface LiveNotesSettings {
