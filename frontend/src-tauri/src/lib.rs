@@ -706,6 +706,8 @@ pub fn run() {
             api::pick_project_folder,
             tray::refresh_tray_menu,
             live_notes::api_generate_live_notes,
+            live_notes::api_save_live_notes,
+            live_notes::api_get_live_notes,
             api::open_meeting_folder,
             api::test_backend_connection,
             api::debug_backend_connection,

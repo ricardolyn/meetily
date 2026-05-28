@@ -8,7 +8,9 @@ import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import { TranscriptPanel } from '@/components/MeetingDetails/TranscriptPanel';
 import { SummaryPanel } from '@/components/MeetingDetails/SummaryPanel';
+import { LiveNotesViewerPanel } from '@/components/MeetingDetails/LiveNotesViewerPanel';
 import { ModelConfig } from '@/components/ModelSettingsModal';
+import { useSavedLiveNotes } from '@/hooks/meeting-details/useSavedLiveNotes';
 
 // Custom hooks
 import { useMeetingData } from '@/hooks/meeting-details/useMeetingData';
@@ -57,6 +59,10 @@ export default function PageContent({
   const [customPrompt, setCustomPrompt] = useState<string>('');
   const [isRecording] = useState(false);
   const [summaryResponse] = useState<SummaryResponse | null>(null);
+  const [activeRightTab, setActiveRightTab] = useState<'summary' | 'live-notes'>('summary');
+
+  // Saved live notes for this meeting (null if none were captured).
+  const { notes: savedLiveNotes } = useSavedLiveNotes(meeting?.folder_path);
 
   // Ref to store the modal open function from SummaryGeneratorButtonGroup
   const openModelSettingsRef = useRef<(() => void) | null>(null);
@@ -192,42 +198,89 @@ export default function PageContent({
           meetingFolderPath={meeting.folder_path}
           onRefetchTranscripts={onRefetchTranscripts}
         />
-        <SummaryPanel
-          meeting={meeting}
-          meetingTitle={meetingData.meetingTitle}
-          onTitleChange={meetingData.handleTitleChange}
-          isEditingTitle={meetingData.isEditingTitle}
-          onStartEditTitle={() => meetingData.setIsEditingTitle(true)}
-          onFinishEditTitle={() => meetingData.setIsEditingTitle(false)}
-          isTitleDirty={meetingData.isTitleDirty}
-          summaryRef={meetingData.blockNoteSummaryRef}
-          isSaving={meetingData.isSaving}
-          onSaveAll={meetingData.saveAllChanges}
-          onCopySummary={copyOperations.handleCopySummary}
-          onOpenFolder={meetingOperations.handleOpenMeetingFolder}
-          aiSummary={meetingData.aiSummary}
-          summaryStatus={summaryGeneration.summaryStatus}
-          transcripts={meetingData.transcripts}
-          modelConfig={modelConfig}
-          setModelConfig={setModelConfig}
-          onSaveModelConfig={handleSaveModelConfig}
-          onGenerateSummary={summaryGeneration.handleGenerateSummary}
-          onStopGeneration={summaryGeneration.handleStopGeneration}
-          customPrompt={customPrompt}
-          summaryResponse={summaryResponse}
-          onSaveSummary={meetingData.handleSaveSummary}
-          onSummaryChange={meetingData.handleSummaryChange}
-          onDirtyChange={meetingData.setIsSummaryDirty}
-          summaryError={summaryGeneration.summaryError}
-          onRegenerateSummary={summaryGeneration.handleRegenerateSummary}
-          getSummaryStatusMessage={summaryGeneration.getSummaryStatusMessage}
-          availableTemplates={templates.availableTemplates}
-          selectedTemplate={templates.selectedTemplate}
-          onTemplateSelect={templates.handleTemplateSelection}
-          isModelConfigLoading={false}
-          onOpenModelSettings={handleRegisterModalOpen}
-        />
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {savedLiveNotes && (
+            <div className="flex items-end gap-1 px-4 pt-2 border-b border-gray-200 bg-gray-50">
+              <TabButton
+                active={activeRightTab === 'summary'}
+                onClick={() => setActiveRightTab('summary')}
+              >
+                Summary
+              </TabButton>
+              <TabButton
+                active={activeRightTab === 'live-notes'}
+                onClick={() => setActiveRightTab('live-notes')}
+              >
+                Live notes
+              </TabButton>
+            </div>
+          )}
+          {activeRightTab === 'live-notes' && savedLiveNotes ? (
+            <LiveNotesViewerPanel notes={savedLiveNotes} />
+          ) : (
+            <SummaryPanel
+              meeting={meeting}
+              meetingTitle={meetingData.meetingTitle}
+              onTitleChange={meetingData.handleTitleChange}
+              isEditingTitle={meetingData.isEditingTitle}
+              onStartEditTitle={() => meetingData.setIsEditingTitle(true)}
+              onFinishEditTitle={() => meetingData.setIsEditingTitle(false)}
+              isTitleDirty={meetingData.isTitleDirty}
+              summaryRef={meetingData.blockNoteSummaryRef}
+              isSaving={meetingData.isSaving}
+              onSaveAll={meetingData.saveAllChanges}
+              onCopySummary={copyOperations.handleCopySummary}
+              onOpenFolder={meetingOperations.handleOpenMeetingFolder}
+              aiSummary={meetingData.aiSummary}
+              summaryStatus={summaryGeneration.summaryStatus}
+              transcripts={meetingData.transcripts}
+              modelConfig={modelConfig}
+              setModelConfig={setModelConfig}
+              onSaveModelConfig={handleSaveModelConfig}
+              onGenerateSummary={summaryGeneration.handleGenerateSummary}
+              onStopGeneration={summaryGeneration.handleStopGeneration}
+              customPrompt={customPrompt}
+              summaryResponse={summaryResponse}
+              onSaveSummary={meetingData.handleSaveSummary}
+              onSummaryChange={meetingData.handleSummaryChange}
+              onDirtyChange={meetingData.setIsSummaryDirty}
+              summaryError={summaryGeneration.summaryError}
+              onRegenerateSummary={summaryGeneration.handleRegenerateSummary}
+              getSummaryStatusMessage={summaryGeneration.getSummaryStatusMessage}
+              availableTemplates={templates.availableTemplates}
+              selectedTemplate={templates.selectedTemplate}
+              onTemplateSelect={templates.handleTemplateSelection}
+              isModelConfigLoading={false}
+              onOpenModelSettings={handleRegisterModalOpen}
+            />
+          )}
+        </div>
       </div>
     </motion.div>
+  );
+}
+
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        'px-3 py-1.5 text-sm font-medium border-b-2 -mb-px transition-colors ' +
+        (active
+          ? 'border-blue-600 text-blue-700'
+          : 'border-transparent text-gray-500 hover:text-gray-800')
+      }
+    >
+      {children}
+    </button>
   );
 }

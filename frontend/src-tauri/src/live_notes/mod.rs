@@ -1,6 +1,10 @@
-// Live in-meeting notes. Runtime-only — never writes to DB or disk so it
-// can never overwrite the saved summary. Called every N seconds from the
-// frontend during an active recording.
+// Live in-meeting notes. Generation is runtime-only and never writes to
+// the DB so it can never overwrite the saved summary. At the end of a
+// recording, the latest snapshot is persisted as `live_notes.json` next
+// to the meeting's `transcripts.json` so the UI can show it after the
+// fact.
+
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use log::{error as log_error, info as log_info, warn as log_warn};
@@ -277,4 +281,57 @@ fn extract_json_object(s: &str) -> Option<&str> {
         }
     }
     None
+}
+
+const LIVE_NOTES_FILENAME: &str = "live_notes.json";
+
+fn live_notes_path(folder_path: &str) -> PathBuf {
+    Path::new(folder_path).join(LIVE_NOTES_FILENAME)
+}
+
+/// Persist the latest live-notes snapshot next to the meeting's
+/// `transcripts.json`. Atomic via temp-file + rename so a crash mid-write
+/// can't truncate an existing file.
+#[tauri::command]
+pub async fn api_save_live_notes(
+    folder_path: String,
+    notes: LiveNotes,
+) -> Result<(), String> {
+    let target = live_notes_path(&folder_path);
+    let temp = Path::new(&folder_path).join(".live_notes.json.tmp");
+
+    let json = serde_json::to_string_pretty(&notes)
+        .map_err(|e| format!("Failed to serialize live notes: {}", e))?;
+
+    log_info!(
+        "api_save_live_notes: writing {} ({} bytes, {} action_items)",
+        target.display(),
+        json.len(),
+        notes.action_items.len(),
+    );
+
+    tokio::fs::write(&temp, json.as_bytes())
+        .await
+        .map_err(|e| format!("Failed to write temp live_notes file: {}", e))?;
+    tokio::fs::rename(&temp, &target)
+        .await
+        .map_err(|e| format!("Failed to rename live_notes temp file: {}", e))?;
+
+    Ok(())
+}
+
+/// Read a previously-saved `live_notes.json`. Returns `None` when the file
+/// is absent (older meeting, or live notes wasn't used) so callers can
+/// hide the UI tab without an error path.
+#[tauri::command]
+pub async fn api_get_live_notes(folder_path: String) -> Result<Option<LiveNotes>, String> {
+    let target = live_notes_path(&folder_path);
+    let bytes = match tokio::fs::read(&target).await {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("Failed to read live_notes.json: {}", e)),
+    };
+    let notes: LiveNotes = serde_json::from_slice(&bytes)
+        .map_err(|e| format!("live_notes.json is not valid: {}", e))?;
+    Ok(Some(notes))
 }

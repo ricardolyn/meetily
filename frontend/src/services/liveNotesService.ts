@@ -80,4 +80,14 @@ export const liveNotesService = {
       modelConfig,
     });
   },
+
+  /** Persist the final snapshot to `live_notes.json` in the meeting folder. */
+  save(folderPath: string, notes: LiveNotes): Promise<void> {
+    return invoke<void>('api_save_live_notes', { folderPath, notes });
+  },
+
+  /** Load a previously-saved snapshot. Returns null if the file is absent. */
+  load(folderPath: string): Promise<LiveNotes | null> {
+    return invoke<LiveNotes | null>('api_get_live_notes', { folderPath });
+  },
 };

@@ -67,18 +67,61 @@ export function useLiveNotes(meetingId: string | null) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const win = await WebviewWindow.getByLabel('live-notes');
-      if (!win || cancelled) return;
-      if (isRecording && enabledForMeeting && panelMode === 'floating') {
-        await win.show();
-      } else {
-        await win.hide();
+      const shouldShow = isRecording && enabledForMeeting && panelMode === 'floating';
+      try {
+        const win = await WebviewWindow.getByLabel('live-notes');
+        if (cancelled) return;
+        if (!win) {
+          console.error('[live-notes] floating window "live-notes" not found');
+          return;
+        }
+        if (shouldShow) {
+          await win.show();
+          // macOS sometimes needs an explicit focus to surface a hidden
+          // alwaysOnTop window above the main one.
+          await win.setFocus().catch(() => {});
+          console.log('[live-notes] floating window shown');
+        } else {
+          await win.hide();
+        }
+      } catch (e) {
+        console.error('[live-notes] floating window toggle failed:', e);
       }
     })();
     return () => {
       cancelled = true;
     };
   }, [isRecording, enabledForMeeting, panelMode]);
+
+  // Persist the final snapshot when recording stops. The Rust side emits
+  // `recording-stopped` with the folder path it just wrote `transcripts.json`
+  // into; we drop `live_notes.json` next to it. Best-effort: silent on
+  // error since failure shouldn't block the post-recording flow.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+    (async () => {
+      const u = await listen<{ folder_path?: string }>('recording-stopped', async event => {
+        const notes = latestRef.current;
+        const folderPath = event.payload?.folder_path;
+        if (!notes || !folderPath) return;
+        try {
+          await liveNotesService.save(folderPath, notes);
+        } catch (e) {
+          console.warn('[live-notes] save on stop failed:', e);
+        }
+      });
+      if (cancelled) {
+        u();
+        return;
+      }
+      unlisten = u;
+    })();
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
 
   // Stable refresh trigger exposed via context. The tick fn is rebuilt
   // each time the effect re-runs; we update tickRef so the trigger
