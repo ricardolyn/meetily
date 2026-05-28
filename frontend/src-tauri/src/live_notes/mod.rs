@@ -320,6 +320,72 @@ pub async fn api_save_live_notes(
     Ok(())
 }
 
+/// Show or hide the pre-declared floating "live-notes" window. Driven
+/// from Rust so we get a single log trail in meetily.log when the JS
+/// path is opaque (release builds, no devtools).
+#[tauri::command]
+pub async fn api_set_live_notes_window_visible<R: Runtime>(
+    app: AppHandle<R>,
+    visible: bool,
+) -> Result<(), String> {
+    use tauri::WebviewWindowBuilder;
+
+    let label = "live-notes";
+    let existing = app.get_webview_window(label);
+
+    log_info!(
+        "api_set_live_notes_window_visible: visible={}, exists_pre_call={}",
+        visible,
+        existing.is_some(),
+    );
+
+    let window = if let Some(w) = existing {
+        w
+    } else {
+        // Recreate dynamically if the pre-declared window was never
+        // instantiated (asset 404, capability error, etc).
+        log_info!("live-notes window missing; building dynamically");
+        WebviewWindowBuilder::new(
+            &app,
+            label,
+            tauri::WebviewUrl::App("live-notes.html".into()),
+        )
+        .title("Live notes")
+        .inner_size(320.0, 480.0)
+        .min_inner_size(280.0, 320.0)
+        .always_on_top(true)
+        .decorations(false)
+        .skip_taskbar(true)
+        .center()
+        .visible(false)
+        .build()
+        .map_err(|e| {
+            log_error!("Failed to build live-notes window: {}", e);
+            format!("Failed to build live-notes window: {}", e)
+        })?
+    };
+
+    if visible {
+        window.show().map_err(|e| {
+            log_error!("live-notes window show() failed: {}", e);
+            format!("show failed: {}", e)
+        })?;
+        window.set_focus().map_err(|e| {
+            log_warn!("live-notes window set_focus() failed: {}", e);
+            format!("set_focus failed: {}", e)
+        })?;
+        log_info!("live-notes window shown");
+    } else {
+        window.hide().map_err(|e| {
+            log_error!("live-notes window hide() failed: {}", e);
+            format!("hide failed: {}", e)
+        })?;
+        log_info!("live-notes window hidden");
+    }
+
+    Ok(())
+}
+
 /// Read a previously-saved `live_notes.json`. Returns `None` when the file
 /// is absent (older meeting, or live notes wasn't used) so callers can
 /// hide the UI tab without an error path.

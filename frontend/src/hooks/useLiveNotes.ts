@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { emit, listen } from '@tauri-apps/api/event';
-import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { useTranscripts } from '@/contexts/TranscriptContext';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
 import { useLiveNotesContext } from '@/contexts/LiveNotesContext';
@@ -62,28 +61,17 @@ export function useLiveNotes(meetingId: string | null) {
   }, [isRecording, resetForMeeting]);
 
   // Show the floating window only when the user has explicitly chosen
-  // floating mode AND the feature is on for the current meeting. The
-  // inline panel is rendered directly inside the main window by page.tsx.
+  // floating mode AND the feature is on for the current meeting. Driven
+  // through a Rust command so a single log trail lands in meetily.log
+  // even when devtools is unavailable in release builds.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const shouldShow = isRecording && enabledForMeeting && panelMode === 'floating';
       try {
-        const win = await WebviewWindow.getByLabel('live-notes');
+        const { invoke } = await import('@tauri-apps/api/core');
         if (cancelled) return;
-        if (!win) {
-          console.error('[live-notes] floating window "live-notes" not found');
-          return;
-        }
-        if (shouldShow) {
-          await win.show();
-          // macOS sometimes needs an explicit focus to surface a hidden
-          // alwaysOnTop window above the main one.
-          await win.setFocus().catch(() => {});
-          console.log('[live-notes] floating window shown');
-        } else {
-          await win.hide();
-        }
+        await invoke('api_set_live_notes_window_visible', { visible: shouldShow });
       } catch (e) {
         console.error('[live-notes] floating window toggle failed:', e);
       }

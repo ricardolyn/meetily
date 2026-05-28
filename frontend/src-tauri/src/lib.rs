@@ -708,6 +708,7 @@ pub fn run() {
             live_notes::api_generate_live_notes,
             live_notes::api_save_live_notes,
             live_notes::api_get_live_notes,
+            live_notes::api_set_live_notes_window_visible,
             api::open_meeting_folder,
             api::test_backend_connection,
             api::debug_backend_connection,
