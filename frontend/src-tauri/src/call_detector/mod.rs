@@ -1,8 +1,9 @@
 // Call-detection reminder.
 //
-// Polls Core Audio every few seconds to check whether the default input
-// device (microphone) is running for any process other than ourselves.
-// When it is, surfaces a reminder via:
+// Polls Core Audio every few seconds to check whether ANY input device
+// (built-in mic, AirPods, USB headset, virtual loopback, …) is running
+// for any process other than ourselves. When one is, surfaces a reminder
+// via:
 //   1. tray icon — adds a "📞 Call detected — Start Recording" menu item
 //   2. OS notification — fires once per call-detected transition
 //
@@ -10,9 +11,9 @@
 // which missed browser-based meetings (Google Meet, Teams web, etc.) and
 // gave no signal for Slack huddles, Discord calls, FaceTime audio, etc.
 // `kAudioDevicePropertyDeviceIsRunningSomewhere` returns true the moment
-// any process opens the input device for IO, regardless of how it got
-// there, so it catches every real use of the mic without false positives
-// from background helpers that merely have the app launched.
+// any process opens an input device for IO. We scan every input device
+// (not just the system default) so a call that grabs headphones / AirPods
+// while the default mic sits idle still triggers the reminder.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter, Runtime};
@@ -47,7 +48,7 @@ pub fn start_call_detector<R: Runtime>(app: AppHandle<R>) {
             // someone isn't us. When we're recording, the device naturally
             // shows as running, so suppress entirely in that case.
             let we_are_recording = crate::audio::recording_commands::is_recording().await;
-            let device_busy = scan_default_input_busy();
+            let device_busy = scan_any_input_busy();
             let now_detected = device_busy && !we_are_recording;
 
             match (call_active, now_detected) {
@@ -73,12 +74,12 @@ pub fn start_call_detector<R: Runtime>(app: AppHandle<R>) {
     });
 }
 
-/// Returns true if the default input device currently has IO running for
-/// at least one process on the system. macOS-only; no-ops elsewhere.
-fn scan_default_input_busy() -> bool {
+/// Returns true if ANY input-capable audio device currently has IO running
+/// for at least one process on the system. macOS-only; no-ops elsewhere.
+fn scan_any_input_busy() -> bool {
     #[cfg(target_os = "macos")]
     {
-        match macos::default_input_is_running_somewhere() {
+        match macos::any_input_is_running_somewhere() {
             Ok(v) => v,
             Err(status) => {
                 log::warn!("Call detector: Core Audio query failed (OSStatus {})", status);
@@ -104,9 +105,10 @@ mod macos {
 
     // AudioObject IDs and property selectors (from CoreAudio/AudioHardware.h).
     const K_AUDIO_OBJECT_SYSTEM_OBJECT: u32 = 1;
-    const SELECTOR_DEFAULT_INPUT: u32 = fcc(b"dIn ");
+    const SELECTOR_DEVICES: u32 = fcc(b"dev#");
     const SELECTOR_IS_RUNNING_SOMEWHERE: u32 = fcc(b"goin");
     const SCOPE_GLOBAL: u32 = fcc(b"glob");
+    const SCOPE_INPUT: u32 = fcc(b"inpt");
     const ELEMENT_MAIN: u32 = 0;
 
     #[repr(C)]
@@ -126,39 +128,84 @@ mod macos {
             io_data_size: *mut u32,
             out_data: *mut c_void,
         ) -> i32;
+
+        fn AudioObjectGetPropertyDataSize(
+            in_object_id: u32,
+            in_address: *const AudioObjectPropertyAddress,
+            in_qualifier_data_size: u32,
+            in_qualifier_data: *const c_void,
+            out_data_size: *mut u32,
+        ) -> i32;
     }
 
-    pub fn default_input_is_running_somewhere() -> Result<bool, i32> {
-        // 1) Resolve the default input device ID.
-        let default_addr = AudioObjectPropertyAddress {
-            selector: SELECTOR_DEFAULT_INPUT,
+    /// True if any input-capable audio device on the system currently has
+    /// IO running. Iterates every audio device known to Core Audio and
+    /// queries `kAudioDevicePropertyDeviceIsRunningSomewhere` against the
+    /// INPUT scope. For an output-only device, that scoped query returns
+    /// 0 or errors — both treated as "not running" here, so we don't need
+    /// a separate input-stream-count probe.
+    pub fn any_input_is_running_somewhere() -> Result<bool, i32> {
+        let devices = enumerate_devices()?;
+        for device_id in devices {
+            match device_input_is_running(device_id) {
+                Ok(true) => return Ok(true),
+                Ok(false) => {}
+                Err(status) => {
+                    log::debug!(
+                        "Call detector: is-running query failed for device {} (OSStatus {})",
+                        device_id,
+                        status
+                    );
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    fn enumerate_devices() -> Result<Vec<u32>, i32> {
+        let addr = AudioObjectPropertyAddress {
+            selector: SELECTOR_DEVICES,
             scope: SCOPE_GLOBAL,
             element: ELEMENT_MAIN,
         };
-        let mut device_id: u32 = 0;
-        let mut size: u32 = size_of::<u32>() as u32;
+        let mut size: u32 = 0;
         let status = unsafe {
-            AudioObjectGetPropertyData(
+            AudioObjectGetPropertyDataSize(
                 K_AUDIO_OBJECT_SYSTEM_OBJECT,
-                &default_addr,
+                &addr,
                 0,
                 std::ptr::null(),
                 &mut size,
-                &mut device_id as *mut u32 as *mut c_void,
             )
         };
         if status != 0 {
             return Err(status);
         }
-        if device_id == 0 {
-            // No default input device — nothing to detect.
-            return Ok(false);
+        let count = (size as usize) / size_of::<u32>();
+        if count == 0 {
+            return Ok(Vec::new());
         }
+        let mut devices: Vec<u32> = vec![0; count];
+        let status = unsafe {
+            AudioObjectGetPropertyData(
+                K_AUDIO_OBJECT_SYSTEM_OBJECT,
+                &addr,
+                0,
+                std::ptr::null(),
+                &mut size,
+                devices.as_mut_ptr() as *mut c_void,
+            )
+        };
+        if status != 0 {
+            return Err(status);
+        }
+        Ok(devices)
+    }
 
-        // 2) Read kAudioDevicePropertyDeviceIsRunningSomewhere (UInt32).
-        let running_addr = AudioObjectPropertyAddress {
+    fn device_input_is_running(device_id: u32) -> Result<bool, i32> {
+        let addr = AudioObjectPropertyAddress {
             selector: SELECTOR_IS_RUNNING_SOMEWHERE,
-            scope: SCOPE_GLOBAL,
+            scope: SCOPE_INPUT,
             element: ELEMENT_MAIN,
         };
         let mut running: u32 = 0;
@@ -166,7 +213,7 @@ mod macos {
         let status = unsafe {
             AudioObjectGetPropertyData(
                 device_id,
-                &running_addr,
+                &addr,
                 0,
                 std::ptr::null(),
                 &mut size,

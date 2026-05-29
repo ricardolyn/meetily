@@ -146,14 +146,21 @@ fn parse_provider(name: &str) -> Result<LLMProvider, String> {
 
 const SYSTEM_PROMPT: &str =
     "You are taking live notes during a meeting for someone who may briefly step away. \
+     The transcript labels each line by speaker: lines starting with \"You:\" are the \
+     user you are helping; lines starting with \"Other:\" are other participants. \
+     Use those labels to decide who said what, but assign asks and actions by the \
+     person responsible for doing them, not by who spoke. \
      Be concise and scannable. Output ONLY a JSON object with keys \
-     \"right_now\" (string, 1-2 sentences), \
+     \"right_now\" (string, 1-2 sentences summarizing the current topic), \
      \"asked_of_you\" (array of strings, empty if nothing), \
      \"action_items\" (array of strings). \
      For \"asked_of_you\", include only questions or asks directed at the user \
      that have not yet been answered. \
-     For \"action_items\", carry forward and de-duplicate items from the \
-     previous notes provided, and add new ones. Each item must be 12 words or fewer.";
+     For \"action_items\", include ONLY things the user is on the hook for — items \
+     they committed to themselves, OR items another participant assigned or asked \
+     them to do. Do NOT include commitments by others that don't involve the user. \
+     Carry forward and de-duplicate items from the previous notes provided, and add \
+     new ones. Each item must be 12 words or fewer.";
 
 fn build_user_prompt(recent_transcripts: &str, previous: Option<&LiveNotes>) -> String {
     let previous_json = match previous {
