@@ -106,7 +106,11 @@ mod macos {
     // AudioObject IDs and property selectors (from CoreAudio/AudioHardware.h).
     const K_AUDIO_OBJECT_SYSTEM_OBJECT: u32 = 1;
     const SELECTOR_DEVICES: u32 = fcc(b"dev#");
-    const SELECTOR_IS_RUNNING_SOMEWHERE: u32 = fcc(b"goin");
+    // kAudioDevicePropertyDeviceIsRunningSomewhere — true when ANY process has
+    // the device running. Note: 'goin' is kAudioDevicePropertyDeviceIsRunning,
+    // which only reflects OUR process's IOProc and stays 0 for calls in other
+    // apps; 'gone' is the cross-process variant we actually need.
+    const SELECTOR_IS_RUNNING_SOMEWHERE: u32 = fcc(b"gone");
     const SCOPE_GLOBAL: u32 = fcc(b"glob");
     const SCOPE_INPUT: u32 = fcc(b"inpt");
     const ELEMENT_MAIN: u32 = 0;
