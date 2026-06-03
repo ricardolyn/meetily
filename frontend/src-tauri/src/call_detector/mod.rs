@@ -111,6 +111,7 @@ mod macos {
     // which only reflects OUR process's IOProc and stays 0 for calls in other
     // apps; 'gone' is the cross-process variant we actually need.
     const SELECTOR_IS_RUNNING_SOMEWHERE: u32 = fcc(b"gone");
+    const SELECTOR_STREAMS: u32 = fcc(b"stm#");
     const SCOPE_GLOBAL: u32 = fcc(b"glob");
     const SCOPE_INPUT: u32 = fcc(b"inpt");
     const ELEMENT_MAIN: u32 = 0;
@@ -142,16 +143,22 @@ mod macos {
         ) -> i32;
     }
 
-    /// True if any input-capable audio device on the system currently has
-    /// IO running. Iterates every audio device known to Core Audio and
-    /// queries `kAudioDevicePropertyDeviceIsRunningSomewhere` against the
-    /// INPUT scope. For an output-only device, that scoped query returns
-    /// 0 or errors — both treated as "not running" here, so we don't need
-    /// a separate input-stream-count probe.
+    /// True if any device that currently exposes an input stream has IO
+    /// running. `kAudioDevicePropertyDeviceIsRunningSomewhere` is device-level,
+    /// NOT scope-aware — it reads 1 whenever the device is doing IO in any
+    /// direction, so an output-only device reports "running" during plain
+    /// playback (music, video) even when queried on the input scope. Gating on
+    /// input-stream presence is therefore required: speakers and displays
+    /// expose 0 input streams, and Bluetooth headsets expose 0 input streams
+    /// in music (A2DP) mode, so neither trips the reminder. A device only
+    /// counts here once something opens it for input IO.
     pub fn any_input_is_running_somewhere() -> Result<bool, i32> {
         let devices = enumerate_devices()?;
         for device_id in devices {
-            match device_input_is_running(device_id) {
+            if device_input_stream_count(device_id) == 0 {
+                continue;
+            }
+            match device_is_running(device_id) {
                 Ok(true) => return Ok(true),
                 Ok(false) => {}
                 Err(status) => {
@@ -206,10 +213,30 @@ mod macos {
         Ok(devices)
     }
 
-    fn device_input_is_running(device_id: u32) -> Result<bool, i32> {
+    /// Number of input streams the device currently exposes. Output-only
+    /// devices report 0; Bluetooth headsets report 0 until a call switches
+    /// them from A2DP to headset (HFP) mode. Returns 0 on query failure so a
+    /// device we can't inspect is never treated as an active mic.
+    fn device_input_stream_count(device_id: u32) -> u32 {
+        let addr = AudioObjectPropertyAddress {
+            selector: SELECTOR_STREAMS,
+            scope: SCOPE_INPUT,
+            element: ELEMENT_MAIN,
+        };
+        let mut size: u32 = 0;
+        let status = unsafe {
+            AudioObjectGetPropertyDataSize(device_id, &addr, 0, std::ptr::null(), &mut size)
+        };
+        if status != 0 {
+            return 0;
+        }
+        size / size_of::<u32>() as u32
+    }
+
+    fn device_is_running(device_id: u32) -> Result<bool, i32> {
         let addr = AudioObjectPropertyAddress {
             selector: SELECTOR_IS_RUNNING_SOMEWHERE,
-            scope: SCOPE_INPUT,
+            scope: SCOPE_GLOBAL,
             element: ELEMENT_MAIN,
         };
         let mut running: u32 = 0;
