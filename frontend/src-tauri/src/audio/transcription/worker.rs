@@ -8,7 +8,8 @@ use crate::audio::AudioChunk;
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tauri::{AppHandle, Emitter, Runtime};
 
 // Sequence counter for transcript updates
@@ -17,10 +18,34 @@ static SEQUENCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 // Speech detection flag - reset per recording session
 static SPEECH_DETECTED_EMITTED: AtomicBool = AtomicBool::new(false);
 
+// Wall-clock instant of the most recent transcribed speech segment, from either
+// the microphone ("me") or system audio ("others"). The silence watchdog reads
+// this to auto-stop a recording after a prolonged stretch with no speech.
+static LAST_SPEECH_AT: Mutex<Option<Instant>> = Mutex::new(None);
+
 /// Reset the speech detected flag for a new recording session
 pub fn reset_speech_detected_flag() {
     SPEECH_DETECTED_EMITTED.store(false, Ordering::SeqCst);
+    // Start the silence clock fresh so the new session gets the full grace
+    // window before the watchdog can fire.
+    mark_speech_detected();
     info!("🔍 SPEECH_DETECTED_EMITTED reset to: {}", SPEECH_DETECTED_EMITTED.load(Ordering::SeqCst));
+}
+
+/// Record that speech was just transcribed, resetting the silence clock.
+pub fn mark_speech_detected() {
+    if let Ok(mut guard) = LAST_SPEECH_AT.lock() {
+        *guard = Some(Instant::now());
+    }
+}
+
+/// Seconds since the last transcribed speech segment, or `None` if no recording
+/// session has started yet.
+pub fn seconds_since_last_speech() -> Option<f64> {
+    LAST_SPEECH_AT
+        .lock()
+        .ok()
+        .and_then(|guard| guard.map(|t| t.elapsed().as_secs_f64()))
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -180,6 +205,10 @@ pub fn start_transcription_task<R: Runtime>(
                                         // PERFORMANCE: Only log transcription results, not every processing step
                                         info!("✅ Worker {} transcribed: {} (confidence: {}, partial: {})",
                                               worker_id, transcript, confidence_str, is_partial);
+
+                                        // Real speech reached the transcript — keep the silence
+                                        // watchdog's clock alive.
+                                        mark_speech_detected();
 
                                         // Emit speech-detected event for frontend UX (only on first detection per session)
                                         // This is lightweight and provides better user feedback

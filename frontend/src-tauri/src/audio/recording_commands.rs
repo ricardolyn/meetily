@@ -7,10 +7,11 @@ use anyhow::Result;
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex,
 };
 use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri_plugin_notification::NotificationExt;
 use tokio::task::JoinHandle;
 
 use super::{
@@ -26,6 +27,8 @@ use super::{
 use super::transcription::{
     self,
     reset_speech_detected_flag,
+    mark_speech_detected,
+    seconds_since_last_speech,
 };
 
 // Re-export TranscriptUpdate for backward compatibility
@@ -44,6 +47,68 @@ static TRANSCRIPTION_TASK: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 
 // Listener ID for proper cleanup - prevents microphone from staying active after recording stops
 static TRANSCRIPT_LISTENER_ID: Mutex<Option<tauri::EventId>> = Mutex::new(None);
+
+// Silence watchdog: auto-stop a recording after this long with no transcribed
+// speech from either source. The generation counter ensures that across rapid
+// stop/start cycles only the newest watchdog stays live.
+const SILENCE_TIMEOUT_SECS: f64 = 180.0;
+const SILENCE_CHECK_INTERVAL_SECS: u64 = 15;
+static SILENCE_WATCHDOG_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Spawn a background task that fully stops the active recording once no speech
+/// has been transcribed for `SILENCE_TIMEOUT_SECS`. Mirrors the call-detector's
+/// spawn loop. Self-exits when recording stops or a newer watchdog supersedes it.
+fn start_silence_watchdog<R: Runtime>(app: AppHandle<R>) {
+    let generation = SILENCE_WATCHDOG_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    tauri::async_runtime::spawn(async move {
+        info!(
+            "🤫 Silence watchdog started (gen {}, timeout {:.0}s)",
+            generation, SILENCE_TIMEOUT_SECS
+        );
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(SILENCE_CHECK_INTERVAL_SECS)).await;
+
+            if SILENCE_WATCHDOG_GENERATION.load(Ordering::SeqCst) != generation {
+                return; // a newer recording session owns the watchdog now
+            }
+            if !is_recording().await {
+                return;
+            }
+            // While paused no audio flows, so keep the silence clock fresh to
+            // avoid an immediate stop on resume.
+            if is_recording_paused().await {
+                mark_speech_detected();
+                continue;
+            }
+
+            let elapsed = match seconds_since_last_speech() {
+                Some(secs) => secs,
+                None => continue,
+            };
+            if elapsed >= SILENCE_TIMEOUT_SECS {
+                info!(
+                    "🤫 No speech for {:.0}s (threshold {:.0}s) — auto-stopping recording",
+                    elapsed, SILENCE_TIMEOUT_SECS
+                );
+                if let Err(e) = app
+                    .notification()
+                    .builder()
+                    .title("Recording stopped")
+                    .body("No speech detected for a few minutes — recording saved.")
+                    .show()
+                {
+                    warn!("Failed to show silence-stop notification: {}", e);
+                }
+                if let Err(e) =
+                    stop_recording(app.clone(), RecordingArgs { save_path: String::new() }).await
+                {
+                    error!("Silence watchdog failed to stop recording: {}", e);
+                }
+                return;
+            }
+        }
+    });
+}
 
 // ============================================================================
 // PUBLIC TYPES
@@ -254,6 +319,9 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     IS_RECORDING.store(true, Ordering::SeqCst);
     reset_speech_detected_flag(); // Reset for new recording session
 
+    // Auto-stop the session after a prolonged silence (no speech from either source)
+    start_silence_watchdog(app.clone());
+
     // Start optimized parallel transcription task and store handle
     let task_handle = transcription::start_transcription_task(app.clone(), transcription_receiver);
     {
@@ -429,6 +497,9 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     info!("🔍 Setting IS_RECORDING to true and resetting SPEECH_DETECTED_EMITTED");
     IS_RECORDING.store(true, Ordering::SeqCst);
     reset_speech_detected_flag(); // Reset for new recording session
+
+    // Auto-stop the session after a prolonged silence (no speech from either source)
+    start_silence_watchdog(app.clone());
 
     // Start optimized parallel transcription task and store handle
     let task_handle = transcription::start_transcription_task(app.clone(), transcription_receiver);
