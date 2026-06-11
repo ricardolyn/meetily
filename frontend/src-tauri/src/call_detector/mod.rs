@@ -5,7 +5,8 @@
 // for any process other than ourselves. When one is, surfaces a reminder
 // via:
 //   1. tray icon — adds a "📞 Call detected — Start Recording" menu item
-//   2. OS notification — fires once per call-detected transition
+//   2. OS notification — re-surfaces periodically until you start recording or
+//      the call ends, since the notification plugin can't pin a banner open
 //
 // We previously matched on hard-coded process names (zoom.us, msteams, …)
 // which missed browser-based meetings (Google Meet, Teams web, etc.) and
@@ -15,7 +16,6 @@
 // (not just the system default) so a call that grabs headphones / AirPods
 // while the default mic sits idle still triggers the reminder.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter, Runtime};
 use tauri_plugin_notification::NotificationExt;
 use tokio::time::{sleep, Duration};
@@ -30,7 +30,10 @@ const POLL_INTERVAL_SECS: u64 = 3;
 /// device-change probing). 2 × 3 s = ≥3 s of consistent presence.
 const DEBOUNCE_SAMPLES: u8 = 2;
 
-static REMINDED_FOR_CURRENT_CALL: AtomicBool = AtomicBool::new(false);
+/// While a call stays detected and we're not yet recording, re-surface the
+/// notification on this cadence so it keeps nagging instead of vanishing after
+/// the first banner.
+const RENOTIFY_INTERVAL_SECS: u64 = 30;
 
 pub fn start_call_detector<R: Runtime>(app: AppHandle<R>) {
     tauri::async_runtime::spawn(async move {
@@ -40,6 +43,8 @@ pub fn start_call_detector<R: Runtime>(app: AppHandle<R>) {
         );
         let mut consecutive_positive: u8 = 0;
         let mut call_active = false;
+        let mut cycles_since_notify: u32 = 0;
+        let renotify_cycles = (RENOTIFY_INTERVAL_SECS / POLL_INTERVAL_SECS).max(1) as u32;
 
         loop {
             sleep(Duration::from_secs(POLL_INTERVAL_SECS)).await;
@@ -57,16 +62,25 @@ pub fn start_call_detector<R: Runtime>(app: AppHandle<R>) {
                     if consecutive_positive >= DEBOUNCE_SAMPLES {
                         call_active = true;
                         consecutive_positive = 0;
+                        cycles_since_notify = 0;
                         on_call_started(&app).await;
+                    }
+                }
+                (true, true) => {
+                    // Still on the call and not recording — keep nagging.
+                    cycles_since_notify += 1;
+                    if cycles_since_notify >= renotify_cycles {
+                        cycles_since_notify = 0;
+                        show_call_notification(&app);
                     }
                 }
                 (true, false) => {
                     call_active = false;
                     consecutive_positive = 0;
-                    REMINDED_FOR_CURRENT_CALL.store(false, Ordering::SeqCst);
+                    cycles_since_notify = 0;
                     on_call_ended(&app).await;
                 }
-                _ => {
+                (false, false) => {
                     consecutive_positive = 0;
                 }
             }
@@ -263,20 +277,23 @@ async fn on_call_started<R: Runtime>(app: &AppHandle<R>) {
 
     crate::tray::set_call_detected(true);
     crate::tray::update_tray_menu(app);
-
-    if !REMINDED_FOR_CURRENT_CALL.swap(true, Ordering::SeqCst) {
-        if let Err(e) = app
-            .notification()
-            .builder()
-            .title("Call detected")
-            .body("Click Meetily to start recording.")
-            .show()
-        {
-            log::warn!("Failed to show call-detected notification: {}", e);
-        }
-    }
+    show_call_notification(app);
 
     let _ = app.emit("call-detected", true);
+}
+
+/// Show the "Call detected" banner. Fired on detection and re-fired on the
+/// re-notify cadence while the call stays active and we're not recording.
+fn show_call_notification<R: Runtime>(app: &AppHandle<R>) {
+    if let Err(e) = app
+        .notification()
+        .builder()
+        .title("Call detected")
+        .body("Click Meetily to start recording.")
+        .show()
+    {
+        log::warn!("Failed to show call-detected notification: {}", e);
+    }
 }
 
 async fn on_call_ended<R: Runtime>(app: &AppHandle<R>) {
