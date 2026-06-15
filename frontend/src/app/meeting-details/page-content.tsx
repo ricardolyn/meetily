@@ -9,8 +9,10 @@ import { toast } from 'sonner';
 import { TranscriptPanel } from '@/components/MeetingDetails/TranscriptPanel';
 import { SummaryPanel } from '@/components/MeetingDetails/SummaryPanel';
 import { LiveNotesViewerPanel } from '@/components/MeetingDetails/LiveNotesViewerPanel';
+import { ChatViewerPanel } from '@/components/MeetingDetails/ChatViewerPanel';
 import { ModelConfig } from '@/components/ModelSettingsModal';
 import { useSavedLiveNotes } from '@/hooks/meeting-details/useSavedLiveNotes';
+import { useSavedChat } from '@/hooks/meeting-details/useSavedChat';
 
 // Custom hooks
 import { useMeetingData } from '@/hooks/meeting-details/useMeetingData';
@@ -59,10 +61,11 @@ export default function PageContent({
   const [customPrompt, setCustomPrompt] = useState<string>('');
   const [isRecording] = useState(false);
   const [summaryResponse] = useState<SummaryResponse | null>(null);
-  const [activeRightTab, setActiveRightTab] = useState<'summary' | 'live-notes'>('summary');
+  const [activeRightTab, setActiveRightTab] = useState<'summary' | 'live-notes' | 'chat'>('summary');
 
-  // Saved live notes for this meeting (null if none were captured).
+  // Saved live notes + chat for this meeting (null if none were captured).
   const { notes: savedLiveNotes } = useSavedLiveNotes(meeting?.folder_path);
+  const { session: savedChat } = useSavedChat(meeting?.folder_path);
 
   // Ref to store the modal open function from SummaryGeneratorButtonGroup
   const openModelSettingsRef = useRef<(() => void) | null>(null);
@@ -199,7 +202,7 @@ export default function PageContent({
           onRefetchTranscripts={onRefetchTranscripts}
         />
         <div className="flex-1 flex flex-col overflow-hidden">
-          {savedLiveNotes && (
+          {(savedLiveNotes || savedChat) && (
             <div className="flex items-end gap-1 px-4 pt-2 border-b border-gray-200 bg-gray-50">
               <TabButton
                 active={activeRightTab === 'summary'}
@@ -207,16 +210,28 @@ export default function PageContent({
               >
                 Summary
               </TabButton>
-              <TabButton
-                active={activeRightTab === 'live-notes'}
-                onClick={() => setActiveRightTab('live-notes')}
-              >
-                Live notes
-              </TabButton>
+              {savedLiveNotes && (
+                <TabButton
+                  active={activeRightTab === 'live-notes'}
+                  onClick={() => setActiveRightTab('live-notes')}
+                >
+                  Live notes
+                </TabButton>
+              )}
+              {savedChat && (
+                <TabButton
+                  active={activeRightTab === 'chat'}
+                  onClick={() => setActiveRightTab('chat')}
+                >
+                  Chat
+                </TabButton>
+              )}
             </div>
           )}
           {activeRightTab === 'live-notes' && savedLiveNotes ? (
             <LiveNotesViewerPanel notes={savedLiveNotes} />
+          ) : activeRightTab === 'chat' && savedChat ? (
+            <ChatViewerPanel session={savedChat} />
           ) : (
             <SummaryPanel
               meeting={meeting}

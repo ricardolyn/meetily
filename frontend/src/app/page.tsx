@@ -21,6 +21,10 @@ import { LiveNotesPill } from '@/components/RecordingControls/LiveNotesPill';
 import { LiveNotesPanel } from '@/components/LiveNotes/LiveNotesPanel';
 import { useLiveNotes } from '@/hooks/useLiveNotes';
 import { useLiveNotesContext } from '@/contexts/LiveNotesContext';
+import { ChatPill } from '@/components/RecordingControls/ChatPill';
+import { ChatPanel } from '@/components/Chat/ChatPanel';
+import { useLiveChat } from '@/hooks/useLiveChat';
+import { useChatContext } from '@/contexts/ChatContext';
 import { useHorizontalResize } from '@/hooks/useHorizontalResize';
 import { useTranscriptRecovery } from '@/hooks/useTranscriptRecovery';
 import { TranscriptRecovery } from '@/components/TranscriptRecovery';
@@ -72,10 +76,13 @@ export default function Home() {
   // to SQLite. The backend only uses it for logging; the actual LLM call
   // is purely transcript-driven.
   useLiveNotes(meetingTitle ?? null);
+  const { ask: askMeeting } = useLiveChat(meetingTitle ?? null);
 
   const { enabledForMeeting, panelMode } = useLiveNotesContext();
+  const { enabledForMeeting: chatEnabledForMeeting } = useChatContext();
   const showInlinePanel =
     recordingState.isRecording && enabledForMeeting && panelMode === 'inline';
+  const showChatPanel = recordingState.isRecording && chatEnabledForMeeting;
   const { width: liveNotesWidth, handleProps, containerRef } = useHorizontalResize({
     storageKey: 'meetily.liveNotes.inlineWidth',
     defaultWidth: 360,
@@ -259,6 +266,15 @@ export default function Home() {
           </>
         )}
 
+        {showChatPanel && (
+          <div
+            className="flex flex-col bg-white border-l border-gray-200"
+            style={{ width: 380, flexShrink: 0 }}
+          >
+            <ChatPanel ask={askMeeting} />
+          </div>
+        )}
+
         {/* Recording controls - only show when permissions are granted or already recording and not showing status messages */}
         {(hasMicrophone || isRecording) &&
           status !== RecordingStatus.PROCESSING_TRANSCRIPTS &&
@@ -274,7 +290,10 @@ export default function Home() {
                   {!recordingState.isRecording && status !== RecordingStatus.STARTING && (
                     <ProjectPicker disabled={isRecordingDisabled} />
                   )}
-                  <LiveNotesPill isRecording={recordingState.isRecording} />
+                  <div className="inline-flex items-center gap-2">
+                    <LiveNotesPill isRecording={recordingState.isRecording} />
+                    <ChatPill isRecording={recordingState.isRecording} />
+                  </div>
                   <div className="bg-white rounded-full shadow-lg flex items-center">
                     <RecordingControls
                       isRecording={recordingState.isRecording}

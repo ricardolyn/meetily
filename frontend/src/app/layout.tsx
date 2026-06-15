@@ -27,6 +27,7 @@ import { ImportAudioDialog, ImportDropOverlay } from '@/components/ImportAudio'
 import { ImportDialogProvider } from '@/contexts/ImportDialogContext'
 import { ProjectsProvider } from '@/contexts/ProjectsContext'
 import { LiveNotesProvider } from '@/contexts/LiveNotesContext'
+import { ChatProvider } from '@/contexts/ChatContext'
 import { isAudioExtension, getAudioFormatsDisplayList } from '@/constants/audioFormats'
 
 
@@ -265,6 +266,7 @@ export default function RootLayout({
                       <SidebarProvider>
                         <ProjectsProvider>
                         <LiveNotesProvider>
+                        <ChatProvider>
                         <TooltipProvider>
                           <RecordingPostProcessingProvider>
                             <ImportDialogProvider onOpen={handleOpenImportDialog}>
@@ -290,6 +292,7 @@ export default function RootLayout({
                             </ImportDialogProvider>
                           </RecordingPostProcessingProvider>
                         </TooltipProvider>
+                        </ChatProvider>
                         </LiveNotesProvider>
                         </ProjectsProvider>
                       </SidebarProvider>

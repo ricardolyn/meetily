@@ -41,6 +41,7 @@ pub mod audio;
 pub mod call_detector;
 pub mod cleanup;
 pub mod config;
+pub mod chat;
 pub mod console_utils;
 pub mod database;
 pub mod live_notes;
@@ -408,6 +409,7 @@ pub fn run() {
                 .level(log::LevelFilter::Info)
                 // Live-notes path is chatty during a meeting; let it through.
                 .level_for("app_lib::live_notes", log::LevelFilter::Debug)
+                .level_for("app_lib::chat", log::LevelFilter::Debug)
                 .targets([
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
                         file_name: Some("meetily".into()),
@@ -709,6 +711,9 @@ pub fn run() {
             live_notes::api_save_live_notes,
             live_notes::api_get_live_notes,
             live_notes::api_set_live_notes_window_visible,
+            chat::api_ask_meeting,
+            chat::api_save_chat,
+            chat::api_get_chat,
             api::open_meeting_folder,
             api::test_backend_connection,
             api::debug_backend_connection,
