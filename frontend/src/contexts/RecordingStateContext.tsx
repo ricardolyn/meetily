@@ -88,14 +88,28 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
     try {
       const backendState = await recordingService.getRecordingState();
 
-      setState(prev => ({
-        ...prev,
-        isRecording: backendState.is_recording,
-        isPaused: backendState.is_paused,
-        isActive: backendState.is_active,
-        recordingDuration: backendState.recording_duration,
-        activeDuration: backendState.active_duration,
-      }));
+      setState(prev => {
+        // Once a stop is underway, ignore the backend's is_recording. During
+        // stop_recording the manager is taken out of RECORDING_MANAGER before
+        // the global IS_RECORDING flag is cleared, so get_recording_state can
+        // briefly report is_recording=true again. Without this guard the poll
+        // resurrects the UI to "recording" mid-stop.
+        const inStopFlow = [
+          RecordingStatus.STOPPING,
+          RecordingStatus.PROCESSING_TRANSCRIPTS,
+          RecordingStatus.SAVING,
+          RecordingStatus.COMPLETED,
+        ].includes(prev.status);
+
+        return {
+          ...prev,
+          isRecording: inStopFlow ? prev.isRecording : backendState.is_recording,
+          isPaused: false,
+          isActive: inStopFlow ? false : backendState.is_active,
+          recordingDuration: backendState.recording_duration,
+          activeDuration: backendState.active_duration,
+        };
+      });
 
       console.log('[RecordingStateContext] Synced with backend:', backendState);
     } catch (error) {
@@ -178,28 +192,6 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
           stopPolling();
         });
         unsubscribers.push(unlistenStopped);
-
-        // Recording paused
-        const unlistenPaused = await recordingService.onRecordingPaused(() => {
-          console.log('[RecordingStateContext] Recording paused event');
-          setState(prev => ({
-            ...prev,
-            isPaused: true,
-            isActive: false,
-          }));
-        });
-        unsubscribers.push(unlistenPaused);
-
-        // Recording resumed
-        const unlistenResumed = await recordingService.onRecordingResumed(() => {
-          console.log('[RecordingStateContext] Recording resumed event');
-          setState(prev => ({
-            ...prev,
-            isPaused: false,
-            isActive: true,
-          }));
-        });
-        unsubscribers.push(unlistenResumed);
 
         console.log('[RecordingStateContext] Event listeners set up successfully');
       } catch (error) {

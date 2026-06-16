@@ -41,9 +41,6 @@ pub enum RecordingState {
     Stopped,
     Starting,
     Recording,
-    Pausing,
-    Paused,
-    Resuming,
     Stopping,
 }
 
@@ -83,8 +80,6 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, item_id: &str) {
             let project_id = s[START_PROJECT_PREFIX.len()..].to_string();
             toggle_recording_handler(app, Some(project_id));
         }
-        "pause_recording" => pause_recording_handler(app),
-        "resume_recording" => resume_recording_handler(app),
         "stop_recording" => stop_recording_handler(app),
         "open_window" => focus_main_window(app),
         "settings" => {
@@ -229,41 +224,6 @@ async fn load_project_folder<R: Runtime>(app: &AppHandle<R>, project_id: &str) -
     }
 }
 
-fn pause_recording_handler<R: Runtime>(app: &AppHandle<R>) {
-    // Immediately show pausing state
-    set_tray_state(app, RecordingState::Pausing);
-
-    let app_clone = app.clone();
-    tauri::async_runtime::spawn(async move {
-        if let Err(e) = crate::audio::recording_commands::pause_recording(app_clone.clone()).await {
-            log::error!("Failed to pause recording from tray: {}", e);
-            // Revert to current state on error
-            update_tray_menu_async(&app_clone).await;
-        } else {
-            log::info!("Recording paused from tray");
-            // The pause_recording function will call update_tray_menu, so no need to call it here
-        }
-    });
-}
-
-fn resume_recording_handler<R: Runtime>(app: &AppHandle<R>) {
-    // Immediately show resuming state
-    set_tray_state(app, RecordingState::Resuming);
-
-    let app_clone = app.clone();
-    tauri::async_runtime::spawn(async move {
-        if let Err(e) = crate::audio::recording_commands::resume_recording(app_clone.clone()).await
-        {
-            log::error!("Failed to resume recording from tray: {}", e);
-            // Revert to current state on error
-            update_tray_menu_async(&app_clone).await;
-        } else {
-            log::info!("Recording resumed from tray");
-            // The resume_recording function will call update_tray_menu, so no need to call it here
-        }
-    });
-}
-
 fn stop_recording_handler<R: Runtime>(app: &AppHandle<R>) {
     // Immediately show stopping state
     set_tray_state(app, RecordingState::Stopping);
@@ -377,17 +337,8 @@ async fn get_current_recording_state() -> RecordingState {
         return RecordingState::Stopped;
     }
 
-    // Check if paused
-    let is_paused = crate::audio::recording_commands::is_recording_paused().await;
-    log::info!("Tray: is_paused: {}", is_paused);
-
-    if is_paused {
-        log::info!("Tray: Recording state is Paused");
-        RecordingState::Paused
-    } else {
-        log::info!("Tray: Recording state is Recording");
-        RecordingState::Recording
-    }
+    log::info!("Tray: Recording state is Recording");
+    RecordingState::Recording
 }
 
 /// Check if recording is allowed based on onboarding status and transcription model availability
@@ -506,33 +457,6 @@ async fn build_menu<R: Runtime>(
             }
             RecordingState::Recording => {
                 builder = builder
-                    .item(&MenuItemBuilder::with_id("pause_recording", "⏸ Pause Recording").build(app)?)
-                    .item(&MenuItemBuilder::with_id("stop_recording", "⏹ Stop Recording").build(app)?);
-            }
-            RecordingState::Pausing => {
-                builder = builder
-                    .item(
-                        &MenuItemBuilder::new("⏸ Pausing...")
-                            .enabled(false)
-                            .build(app)?,
-                    )
-                    .item(&MenuItemBuilder::with_id("stop_recording", "⏹ Stop Recording").build(app)?);
-            }
-            RecordingState::Paused => {
-                builder = builder
-                    .item(
-                        &MenuItemBuilder::with_id("resume_recording", "▶ Resume Recording")
-                            .build(app)?,
-                    )
-                    .item(&MenuItemBuilder::with_id("stop_recording", "⏹ Stop Recording").build(app)?);
-            }
-            RecordingState::Resuming => {
-                builder = builder
-                    .item(
-                        &MenuItemBuilder::new("▶ Resuming...")
-                            .enabled(false)
-                            .build(app)?,
-                    )
                     .item(&MenuItemBuilder::with_id("stop_recording", "⏹ Stop Recording").build(app)?);
             }
             RecordingState::Stopping => {

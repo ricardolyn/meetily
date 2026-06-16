@@ -650,10 +650,6 @@ pub fn run() {
             start_audio_level_monitoring,
             stop_audio_level_monitoring,
             is_audio_level_monitoring,
-            // Recording pause/resume commands
-            audio::recording_commands::pause_recording,
-            audio::recording_commands::resume_recording,
-            audio::recording_commands::is_recording_paused,
             audio::recording_commands::get_recording_state,
             audio::recording_commands::get_meeting_folder_path,
             // Reload sync commands (retrieve transcript history and meeting name)

@@ -97,22 +97,6 @@ export class RecordingService {
     });
   }
 
-  /**
-   * Pause active recording
-   * @returns Promise<void>
-   */
-  async pauseRecording(): Promise<void> {
-    return invoke('pause_recording');
-  }
-
-  /**
-   * Resume paused recording
-   * @returns Promise<void>
-   */
-  async resumeRecording(): Promise<void> {
-    return invoke('resume_recording');
-  }
-
   // Event Listeners
 
   /**
@@ -133,24 +117,6 @@ export class RecordingService {
     return listen<RecordingStoppedPayload>('recording-stopped', (event) => {
       callback(event.payload);
     });
-  }
-
-  /**
-   * Listen for recording-paused event
-   * @param callback - Function to call when recording is paused
-   * @returns Promise that resolves to unlisten function
-   */
-  async onRecordingPaused(callback: () => void): Promise<UnlistenFn> {
-    return listen('recording-paused', callback);
-  }
-
-  /**
-   * Listen for recording-resumed event
-   * @param callback - Function to call when recording resumes
-   * @returns Promise that resolves to unlisten function
-   */
-  async onRecordingResumed(callback: () => void): Promise<UnlistenFn> {
-    return listen('recording-resumed', callback);
   }
 
   /**

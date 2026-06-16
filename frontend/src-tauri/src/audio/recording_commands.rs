@@ -991,76 +991,11 @@ pub async fn get_transcription_status() -> TranscriptionStatus {
     }
 }
 
-/// Pause the current recording
-#[tauri::command]
-pub async fn pause_recording<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
-    info!("Pausing recording");
-
-    // Check if currently recording
-    if !IS_RECORDING.load(Ordering::SeqCst) {
-        return Err("No recording is currently active".to_string());
-    }
-
-    // Access the recording manager and pause it
-    let manager_guard = RECORDING_MANAGER.lock().unwrap();
-    if let Some(manager) = manager_guard.as_ref() {
-        manager.pause_recording().map_err(|e| e.to_string())?;
-
-        // Emit pause event to frontend
-        app.emit(
-            "recording-paused",
-            serde_json::json!({
-                "message": "Recording paused"
-            }),
-        )
-        .map_err(|e| e.to_string())?;
-
-        // Update tray menu to reflect paused state
-        crate::tray::update_tray_menu(&app);
-
-        info!("Recording paused successfully");
-        Ok(())
-    } else {
-        Err("No recording manager found".to_string())
-    }
-}
-
-/// Resume the current recording
-#[tauri::command]
-pub async fn resume_recording<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
-    info!("Resuming recording");
-
-    // Check if currently recording
-    if !IS_RECORDING.load(Ordering::SeqCst) {
-        return Err("No recording is currently active".to_string());
-    }
-
-    // Access the recording manager and resume it
-    let manager_guard = RECORDING_MANAGER.lock().unwrap();
-    if let Some(manager) = manager_guard.as_ref() {
-        manager.resume_recording().map_err(|e| e.to_string())?;
-
-        // Emit resume event to frontend
-        app.emit(
-            "recording-resumed",
-            serde_json::json!({
-                "message": "Recording resumed"
-            }),
-        )
-        .map_err(|e| e.to_string())?;
-
-        // Update tray menu to reflect resumed state
-        crate::tray::update_tray_menu(&app);
-
-        info!("Recording resumed successfully");
-        Ok(())
-    } else {
-        Err("No recording manager found".to_string())
-    }
-}
-
-/// Check if recording is currently paused
-#[tauri::command]
+/// Check if recording is currently paused.
+///
+/// Pause is no longer user-triggerable (the pause feature was removed because
+/// stopping from a paused state could hang). Kept as an always-false internal
+/// helper so the silence watchdog and recording-state readout stay correct.
 pub async fn is_recording_paused() -> bool {
     let manager_guard = RECORDING_MANAGER.lock().unwrap();
     if let Some(manager) = manager_guard.as_ref() {
