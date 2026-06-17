@@ -27,7 +27,6 @@ use super::{
 use super::transcription::{
     self,
     reset_speech_detected_flag,
-    mark_speech_detected,
     seconds_since_last_speech,
 };
 
@@ -74,12 +73,6 @@ fn start_silence_watchdog<R: Runtime>(app: AppHandle<R>) {
             if !is_recording().await {
                 return;
             }
-            // While paused no audio flows, so keep the silence clock fresh to
-            // avoid an immediate stop on resume.
-            if is_recording_paused().await {
-                mark_speech_detected();
-                continue;
-            }
 
             let elapsed = match seconds_since_last_speech() {
                 Some(secs) => secs,
@@ -99,10 +92,20 @@ fn start_silence_watchdog<R: Runtime>(app: AppHandle<R>) {
                 {
                     warn!("Failed to show silence-stop notification: {}", e);
                 }
-                if let Err(e) =
-                    stop_recording(app.clone(), RecordingArgs { save_path: String::new() }).await
-                {
-                    error!("Silence watchdog failed to stop recording: {}", e);
+                match stop_recording(app.clone(), RecordingArgs { save_path: String::new() }).await {
+                    Ok(_) => {
+                        // Drive the same frontend post-processing the tray-stop
+                        // uses (SQLite save, navigation, analytics). Without this
+                        // the transcript is written to disk but the meeting is
+                        // never saved to the database.
+                        if let Err(e) = app.emit("recording-stop-complete", true) {
+                            error!(
+                                "Silence watchdog: failed to emit recording-stop-complete: {}",
+                                e
+                            );
+                        }
+                    }
+                    Err(e) => error!("Silence watchdog failed to stop recording: {}", e),
                 }
                 return;
             }
@@ -988,20 +991,6 @@ pub async fn get_transcription_status() -> TranscriptionStatus {
         chunks_in_queue: 0,
         is_processing: IS_RECORDING.load(Ordering::SeqCst),
         last_activity_ms: 0,
-    }
-}
-
-/// Check if recording is currently paused.
-///
-/// Pause is no longer user-triggerable (the pause feature was removed because
-/// stopping from a paused state could hang). Kept as an always-false internal
-/// helper so the silence watchdog and recording-state readout stay correct.
-pub async fn is_recording_paused() -> bool {
-    let manager_guard = RECORDING_MANAGER.lock().unwrap();
-    if let Some(manager) = manager_guard.as_ref() {
-        manager.is_paused()
-    } else {
-        false
     }
 }
 
