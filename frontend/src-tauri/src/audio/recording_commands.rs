@@ -293,10 +293,27 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     });
     manager.set_meeting_name(Some(effective_meeting_name));
 
-    // If a project folder was supplied, route saved files there
+    // If a project folder was supplied, route saved files there. A project can
+    // point its recordings at an external location (e.g. a Google Drive folder).
+    // Pre-flight that the folder is reachable and writable BEFORE we commit to
+    // the recording: otherwise folder creation fails silently mid-recording and
+    // the meeting is saved with no folder and no audio. Fail loudly instead so
+    // the user can fix the path / mount the drive and retry.
     if let Some(folder) = project_folder.as_ref() {
         info!("📁 Project folder supplied for recording: {}", folder);
-        manager.set_project_folder(Some(std::path::PathBuf::from(folder)));
+        let project_path = std::path::PathBuf::from(folder);
+        let probe = project_path.join(".meetily_write_test");
+        if let Err(e) = std::fs::create_dir_all(&probe) {
+            let msg = format!(
+                "Can't start recording: this project's recording folder isn't available.\n\n{}\n\nMake sure the folder exists and is mounted (e.g. Google Drive is synced), then try again.\n\nDetails: {}",
+                project_path.display(),
+                e
+            );
+            error!("{}", msg);
+            return Err(msg);
+        }
+        let _ = std::fs::remove_dir(&probe);
+        manager.set_project_folder(Some(project_path));
     }
 
     // Set up error callback
@@ -472,10 +489,27 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     });
     manager.set_meeting_name(Some(effective_meeting_name));
 
-    // If a project folder was supplied, route saved files there
+    // If a project folder was supplied, route saved files there. A project can
+    // point its recordings at an external location (e.g. a Google Drive folder).
+    // Pre-flight that the folder is reachable and writable BEFORE we commit to
+    // the recording: otherwise folder creation fails silently mid-recording and
+    // the meeting is saved with no folder and no audio. Fail loudly instead so
+    // the user can fix the path / mount the drive and retry.
     if let Some(folder) = project_folder.as_ref() {
         info!("📁 Project folder supplied for recording: {}", folder);
-        manager.set_project_folder(Some(std::path::PathBuf::from(folder)));
+        let project_path = std::path::PathBuf::from(folder);
+        let probe = project_path.join(".meetily_write_test");
+        if let Err(e) = std::fs::create_dir_all(&probe) {
+            let msg = format!(
+                "Can't start recording: this project's recording folder isn't available.\n\n{}\n\nMake sure the folder exists and is mounted (e.g. Google Drive is synced), then try again.\n\nDetails: {}",
+                project_path.display(),
+                e
+            );
+            error!("{}", msg);
+            return Err(msg);
+        }
+        let _ = std::fs::remove_dir(&probe);
+        manager.set_project_folder(Some(project_path));
     }
 
     // Set up error callback

@@ -105,8 +105,15 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
       // Parse error message to provide user-friendly feedback
       const errorMsg = error instanceof Error ? error.message : String(error);
 
-      // Check for device-related errors
-      if (errorMsg.includes('microphone') || errorMsg.includes('mic') || errorMsg.includes('input')) {
+      // Project recording folder unreachable (e.g. unmounted Google Drive).
+      // Show the backend's actionable message verbatim rather than the generic
+      // audio-device fallback.
+      if (errorMsg.toLowerCase().includes('recording folder')) {
+        setDeviceError({
+          title: 'Recording Folder Not Available',
+          message: errorMsg,
+        });
+      } else if (errorMsg.includes('microphone') || errorMsg.includes('mic') || errorMsg.includes('input')) {
         setDeviceError({
           title: 'Microphone Not Available',
           message: 'Unable to access your microphone. Please check that:\n• Your microphone is connected\n• The app has microphone permissions\n• No other app is using the microphone'
