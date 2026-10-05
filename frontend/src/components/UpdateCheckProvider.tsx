@@ -22,8 +22,11 @@ export function UpdateCheckProvider({ children }: { children: React.ReactNode })
     setShowDialog(true);
   }, []);
 
+  // No automatic check on startup: this is a fork build, and the update
+  // prompt offers the upstream release, which would replace it. Checks run
+  // only when asked for (tray menu, About page).
   const { updateInfo, isChecking, checkForUpdates } = useUpdateCheck({
-    checkOnMount: true,
+    checkOnMount: false,
     showNotification: true,
     onUpdateAvailable: (info) => {
       // Show notification, dialog will be shown when user clicks notification
