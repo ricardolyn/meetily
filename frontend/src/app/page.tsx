@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { RecordingControls } from '@/components/RecordingControls';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
@@ -105,16 +105,22 @@ export default function Home() {
     Analytics.trackPageView('home');
   }, []);
 
-  // Startup recovery check
+  // Recovery check, once each time Home opens (app start, or coming back from
+  // another page). Deliberately NOT re-run on recording-status changes: a run
+  // right after a stop could catch the meeting before its save finished and
+  // offer it for recovery. Live status is read through a ref for the skip.
+  const recordingActivityRef = useRef({ isRecording: recordingState.isRecording, status });
+  recordingActivityRef.current = { isRecording: recordingState.isRecording, status };
   useEffect(() => {
     const performStartupChecks = async () => {
       try {
-        // Skip recovery check if currently recording or processing stop
-        // This prevents the recovery dialog from showing when:
-        if (recordingState.isRecording ||
-          status === RecordingStatus.STOPPING ||
-          status === RecordingStatus.PROCESSING_TRANSCRIPTS ||
-          status === RecordingStatus.SAVING) {
+        // Skip while recording or while a stop is still being processed/saved.
+        const activity = recordingActivityRef.current;
+        if (activity.isRecording ||
+          activity.status === RecordingStatus.STARTING ||
+          activity.status === RecordingStatus.STOPPING ||
+          activity.status === RecordingStatus.PROCESSING_TRANSCRIPTS ||
+          activity.status === RecordingStatus.SAVING) {
           console.log('Skipping recovery check - recording in progress or processing');
           return;
         }
@@ -142,7 +148,7 @@ export default function Home() {
     };
 
     performStartupChecks();
-  }, [checkForRecoverableTranscripts, recordingState.isRecording, status]);
+  }, [checkForRecoverableTranscripts]);
 
   // Watch for recoverable meetings changes and show dialog once per session
   useEffect(() => {

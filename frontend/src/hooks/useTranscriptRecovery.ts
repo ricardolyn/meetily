@@ -47,11 +47,12 @@ export function useTranscriptRecovery(): UseTranscriptRecoveryReturn {
       const cutoffTime = Date.now() - (7 * 24 * 60 * 60 * 1000);
       const secondsAgo = Date.now() - (15 * 1000);
 
-      const recentMeetings = meetings.filter(m => {
+      const timeWindowed = meetings.filter(m => {
         const isWithinRetention = m.lastUpdated > cutoffTime; // Not older than 7 days
         const isOldEnough = m.lastUpdated < secondsAgo; // Older than 15 seconds
         return isWithinRetention && isOldEnough;
       });
+      const recentMeetings = await dropAlreadySaved(timeWindowed);
 
       // Verify audio checkpoint availability for each meeting
       const meetingsWithAudioStatus = await Promise.all(
@@ -234,4 +235,37 @@ export function useTranscriptRecovery(): UseTranscriptRecoveryReturn {
     loadMeetingTranscripts,
     deleteRecoverableMeeting
   };
+}
+
+/**
+ * Drop meetings whose recording is already saved in the database, matched by
+ * recording folder, and mark them saved in IndexedDB so they aren't offered
+ * again. The IndexedDB "saved" flag can be left stale (e.g. a check that ran
+ * mid-save), which used to offer — and duplicate — meetings already saved.
+ */
+async function dropAlreadySaved(candidates: MeetingMetadata[]): Promise<MeetingMetadata[]> {
+  if (!candidates.some(m => m.folderPath)) return candidates;
+
+  let savedFolders: Set<string>;
+  try {
+    const saved = await storageService.getMeetings();
+    savedFolders = new Set(
+      saved.map(m => m.folder_path).filter((p): p is string => typeof p === 'string' && p !== '')
+    );
+  } catch (error) {
+    console.warn('[Recovery] Could not load saved meetings; skipping duplicate check:', error);
+    return candidates;
+  }
+
+  const unsaved: MeetingMetadata[] = [];
+  for (const meeting of candidates) {
+    if (meeting.folderPath && savedFolders.has(meeting.folderPath)) {
+      await indexedDBService
+        .markMeetingSaved(meeting.meetingId)
+        .catch(error => console.warn('[Recovery] Failed to mark meeting saved:', error));
+      continue;
+    }
+    unsaved.push(meeting);
+  }
+  return unsaved;
 }

@@ -38,6 +38,9 @@ pub struct Meeting {
     /// Project association so the sidebar can filter by project.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
+    /// Recording folder; lets transcript recovery skip meetings already saved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder_path: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -371,6 +374,7 @@ pub async fn api_get_meetings<R: Runtime>(
                     title: m.title,
                     created_at: m.created_at.0.to_rfc3339(),
                     project_id: m.project_id,
+                    folder_path: m.folder_path,
                 })
                 .collect();
             Ok(result)
