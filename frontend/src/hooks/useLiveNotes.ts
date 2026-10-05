@@ -28,8 +28,6 @@ export function useLiveNotes(meetingId: string | null) {
     setLatest,
     latest,
     setStatus,
-    panelMode,
-    setPanelMode,
     registerRefreshFn,
   } = useLiveNotesContext();
 
@@ -60,27 +58,6 @@ export function useLiveNotes(meetingId: string | null) {
       });
     }
   }, [isRecording, resetForMeeting]);
-
-  // Show the floating window only when the user has explicitly chosen
-  // floating mode AND the feature is on for the current meeting. Driven
-  // through a Rust command so a single log trail lands in meetily.log
-  // even when devtools is unavailable in release builds.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const shouldShow = isRecording && enabledForMeeting && panelMode === 'floating';
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        if (cancelled) return;
-        await invoke('api_set_live_notes_window_visible', { visible: shouldShow });
-      } catch (e) {
-        console.error('[live-notes] floating window toggle failed:', e);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [isRecording, enabledForMeeting, panelMode]);
 
   // Persist the final snapshot when recording stops. The Rust side emits
   // `recording-stopped` with the folder path it just wrote `transcripts.json`
@@ -168,7 +145,7 @@ export function useLiveNotes(meetingId: string | null) {
     tickRef.current = tick;
 
     const handle = window.setInterval(tick, intervalMs);
-    // Floating-window-triggered manual refresh and pause; mounted gate
+    // Floating-window-triggered manual refresh and turn-off; mounted gate
     // covers the race where listen() resolves after teardown.
     const unlistenRefreshP = listen<void>('live-notes-refresh-request', () => {
       if (!mounted) return;
@@ -178,19 +155,14 @@ export function useLiveNotes(meetingId: string | null) {
       if (!mounted) return;
       setEnabledForMeeting(false);
     });
-    const unlistenDockP = listen<void>('live-notes-dock-request', () => {
-      if (!mounted) return;
-      setPanelMode('inline');
-    });
 
     return () => {
       mounted = false;
       window.clearInterval(handle);
       unlistenRefreshP.then(u => u()).catch(() => {});
       unlistenPauseP.then(u => u()).catch(() => {});
-      unlistenDockP.then(u => u()).catch(() => {});
     };
-  }, [isRecording, enabledForMeeting, meetingId, setLatest, setEnabledForMeeting, setStatus, setPanelMode]);
+  }, [isRecording, enabledForMeeting, meetingId, setLatest, setEnabledForMeeting, setStatus]);
 }
 
 function buildRecentTranscriptText(transcripts: TranscriptLine[], intervalMs: number): string {

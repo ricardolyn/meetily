@@ -18,13 +18,18 @@ import { useRecordingStart } from '@/hooks/useRecordingStart';
 import { useRecordingStop } from '@/hooks/useRecordingStop';
 import { ProjectPicker } from '@/components/RecordingControls/ProjectPicker';
 import { LiveNotesPill } from '@/components/RecordingControls/LiveNotesPill';
-import { LiveNotesPanel } from '@/components/LiveNotes/LiveNotesPanel';
+import { SidePanel } from '@/components/SidePanel/SidePanel';
 import { useLiveNotes } from '@/hooks/useLiveNotes';
 import { useLiveNotesContext } from '@/contexts/LiveNotesContext';
 import { ChatPill } from '@/components/RecordingControls/ChatPill';
 import { ChatPanel } from '@/components/Chat/ChatPanel';
 import { useLiveChat } from '@/hooks/useLiveChat';
 import { useChatContext } from '@/contexts/ChatContext';
+import { CoachPill } from '@/components/RecordingControls/CoachPill';
+import { CoachContextButton } from '@/components/RecordingControls/CoachContextButton';
+import { useCoach } from '@/hooks/useCoach';
+import { useCoachContext } from '@/contexts/CoachContext';
+import { useSidePanelWindow } from '@/hooks/useSidePanelWindow';
 import { useHorizontalResize } from '@/hooks/useHorizontalResize';
 import { useTranscriptRecovery } from '@/hooks/useTranscriptRecovery';
 import { TranscriptRecovery } from '@/components/TranscriptRecovery';
@@ -77,11 +82,16 @@ export default function Home() {
   // is purely transcript-driven.
   useLiveNotes(meetingTitle ?? null);
   const { ask: askMeeting } = useLiveChat(meetingTitle ?? null);
+  useCoach(meetingTitle ?? null);
+  useSidePanelWindow();
 
   const { enabledForMeeting, panelMode } = useLiveNotesContext();
   const { enabledForMeeting: chatEnabledForMeeting } = useChatContext();
+  const { enabledForMeeting: coachEnabledForMeeting } = useCoachContext();
   const showInlinePanel =
-    recordingState.isRecording && enabledForMeeting && panelMode === 'inline';
+    recordingState.isRecording &&
+    panelMode === 'inline' &&
+    (enabledForMeeting || coachEnabledForMeeting);
   const showChatPanel = recordingState.isRecording && chatEnabledForMeeting;
   const { width: liveNotesWidth, handleProps, containerRef } = useHorizontalResize({
     storageKey: 'meetily.liveNotes.inlineWidth',
@@ -261,7 +271,7 @@ export default function Home() {
               className="flex flex-col bg-white border-l border-gray-200"
               style={{ width: liveNotesWidth, flexShrink: 0 }}
             >
-              <LiveNotesPanel inline />
+              <SidePanel inline />
             </div>
           </>
         )}
@@ -288,11 +298,15 @@ export default function Home() {
               >
                 <div className="w-2/3 max-w-[750px] flex flex-col items-center gap-2">
                   {!recordingState.isRecording && status !== RecordingStatus.STARTING && (
-                    <ProjectPicker disabled={isRecordingDisabled} />
+                    <div className="flex items-center gap-2">
+                      <ProjectPicker disabled={isRecordingDisabled} />
+                      <CoachContextButton disabled={isRecordingDisabled} />
+                    </div>
                   )}
                   <div className="inline-flex items-center gap-2">
                     <LiveNotesPill isRecording={recordingState.isRecording} />
                     <ChatPill isRecording={recordingState.isRecording} />
+                    <CoachPill isRecording={recordingState.isRecording} />
                   </div>
                   <div className="bg-white rounded-full shadow-lg flex items-center">
                     <RecordingControls

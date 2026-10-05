@@ -28,6 +28,7 @@ import { ImportDialogProvider } from '@/contexts/ImportDialogContext'
 import { ProjectsProvider } from '@/contexts/ProjectsContext'
 import { LiveNotesProvider } from '@/contexts/LiveNotesContext'
 import { ChatProvider } from '@/contexts/ChatContext'
+import { CoachProvider } from '@/contexts/CoachContext'
 import { isAudioExtension, getAudioFormatsDisplayList } from '@/constants/audioFormats'
 
 
@@ -267,6 +268,7 @@ export default function RootLayout({
                         <ProjectsProvider>
                         <LiveNotesProvider>
                         <ChatProvider>
+                        <CoachProvider>
                         <TooltipProvider>
                           <RecordingPostProcessingProvider>
                             <ImportDialogProvider onOpen={handleOpenImportDialog}>
@@ -292,6 +294,7 @@ export default function RootLayout({
                             </ImportDialogProvider>
                           </RecordingPostProcessingProvider>
                         </TooltipProvider>
+                        </CoachProvider>
                         </ChatProvider>
                         </LiveNotesProvider>
                         </ProjectsProvider>

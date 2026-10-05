@@ -18,19 +18,22 @@ interface LiveNotes {
 interface Props {
   /** When true, runs inside the main window (no Tauri events needed). */
   inline?: boolean;
+  /** Side-panel tab switcher shown as the header title. */
+  tabs: React.ReactNode;
 }
 
-export function LiveNotesPanel({ inline = false }: Props) {
-  if (inline) return <InlineLiveNotesPanel />;
-  return <FloatingLiveNotesPanel />;
+export function LiveNotesPanel({ inline = false, tabs }: Props) {
+  if (inline) return <InlineLiveNotesPanel tabs={tabs} />;
+  return <FloatingLiveNotesPanel tabs={tabs} />;
 }
 
-function InlineLiveNotesPanel() {
+function InlineLiveNotesPanel({ tabs }: { tabs: React.ReactNode }) {
   const { latest, status, refresh, setEnabledForMeeting, setPanelMode } =
     useLiveNotesContext();
 
   return (
     <PanelChrome
+      tabs={tabs}
       status={status}
       onRefresh={refresh}
       onPause={() => setEnabledForMeeting(false)}
@@ -44,7 +47,7 @@ function InlineLiveNotesPanel() {
   );
 }
 
-function FloatingLiveNotesPanel() {
+function FloatingLiveNotesPanel({ tabs }: { tabs: React.ReactNode }) {
   const [notes, setNotes] = useState<LiveNotes | null>(null);
   const [status, setStatus] = useState<LiveNotesStatus>({ kind: 'idle' });
 
@@ -81,6 +84,7 @@ function FloatingLiveNotesPanel() {
 
   return (
     <PanelChrome
+      tabs={tabs}
       status={status}
       onRefresh={() => { void emit('live-notes-refresh-request').catch(() => {}); }}
       onPause={() => { void emit('live-notes-pause-request').catch(() => {}); }}
@@ -95,6 +99,7 @@ function FloatingLiveNotesPanel() {
 }
 
 interface PanelChromeProps {
+  tabs: React.ReactNode;
   status: LiveNotesStatus;
   onRefresh: () => void;
   onPause: () => void;
@@ -102,11 +107,11 @@ interface PanelChromeProps {
   notes: LiveNotes | null;
 }
 
-function PanelChrome({ status, onRefresh, onPause, extraAction, notes }: PanelChromeProps) {
+function PanelChrome({ tabs, status, onRefresh, onPause, extraAction, notes }: PanelChromeProps) {
   return (
     <div className="flex flex-col h-full text-sm">
       <header className="flex items-center gap-2 px-3 py-2 border-b border-gray-200 bg-gray-50">
-        <span className="flex-1 font-medium text-gray-700">Live notes</span>
+        <div className="flex-1 min-w-0">{tabs}</div>
         <span className="text-xs text-gray-500">
           {status.kind === 'refreshing' && (
             <Loader2 className="w-3.5 h-3.5 animate-spin inline" />

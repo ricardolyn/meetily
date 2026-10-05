@@ -42,6 +42,7 @@ pub mod call_detector;
 pub mod cleanup;
 pub mod config;
 pub mod chat;
+pub mod coach;
 pub mod console_utils;
 pub mod database;
 pub mod live_llm;
@@ -411,6 +412,7 @@ pub fn run() {
                 // Live-notes path is chatty during a meeting; let it through.
                 .level_for("app_lib::live_notes", log::LevelFilter::Debug)
                 .level_for("app_lib::chat", log::LevelFilter::Debug)
+                .level_for("app_lib::coach", log::LevelFilter::Debug)
                 .level_for("app_lib::live_llm", log::LevelFilter::Debug)
                 .targets([
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
@@ -712,6 +714,7 @@ pub fn run() {
             chat::api_ask_meeting,
             chat::api_save_chat,
             chat::api_get_chat,
+            coach::api_coach_suggest,
             api::open_meeting_folder,
             api::test_backend_connection,
             api::debug_backend_connection,
