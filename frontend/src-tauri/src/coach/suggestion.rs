@@ -4,7 +4,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::live_llm::output::{parse_json_object, string_array};
+use crate::live_llm::output::{head_chars, parse_json_object, string_array};
 
 /// A suggestion of what the user could say next.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,17 +21,33 @@ pub const SYSTEM_PROMPT: &str =
      (an interview, a sales call, a team meeting, or any other conversation). You get \
      the user's own notes about the conversation (who they are talking to, their goals, \
      background such as a CV or job description) and the transcript so far. Lines \
-     starting with \"You:\" are the user; lines starting with \"Other:\" are the other \
-     participants. Focus on the most recent exchange: if someone just asked the user a \
-     question, help them answer it; otherwise help them move the conversation toward \
-     their goals. Ground every suggestion in the user's notes and what has been said, \
+     starting with \"You:\" were said by the user; lines starting with \"Other:\" were \
+     said by the other participants. Pay close attention to who said what: a \"You:\" \
+     line is something the user already said, so never answer the user's own questions \
+     and never repeat what they just said. Only questions from \"Other:\" lines need an \
+     answer. You are also told who said the most recent line: if another participant \
+     just asked the user something, the reply answers it for the user; if the user just \
+     asked something, the reply is a natural follow-up for after the other person \
+     answers; otherwise help the user move the conversation toward their goals. Ground \
+     every suggestion in the user's notes and what has been said, \
      and never invent facts about the user that are not in their notes or the \
      transcript. Write in the language the conversation is happening in. Output ONLY a \
      JSON object with keys \"reply\" (string: 1-3 sentences the user could say next, \
      first person, natural spoken language) and \"talking_points\" (array of 2-4 short \
      strings: points to mention or questions to ask, each 15 words or fewer).";
 
-/// Build the user prompt from the user's notes and the transcript so far.
+/// Longest quote of the latest line repeated in the prompt.
+const LATEST_LINE_QUOTE_CHARS: usize = 300;
+
+/// Who said a transcript line, from its `You:` / `Other:` label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Speaker {
+    User,
+    Other,
+}
+
+/// Build the user prompt from the user's notes and the transcript so far,
+/// ending with an explicit statement of who said the most recent line.
 pub fn build_user_prompt(context: &str, transcript: &str) -> String {
     let context = context.trim();
     let transcript = transcript.trim();
@@ -40,15 +56,58 @@ pub fn build_user_prompt(context: &str, transcript: &str) -> String {
     } else {
         context
     };
+    let latest = latest_line_guidance(transcript);
     let transcript = if transcript.is_empty() {
         "(nothing has been said yet)"
     } else {
         transcript
     };
     format!(
-        "User's notes about this conversation:\n{}\n\nTranscript so far:\n{}",
-        context, transcript
+        "User's notes about this conversation:\n{}\n\nTranscript so far:\n{}\n\nMost recent line:\n{}",
+        context, transcript, latest
     )
+}
+
+/// Spell out who said the latest line, so the model doesn't answer the
+/// user's own question back to them.
+fn latest_line_guidance(transcript: &str) -> String {
+    if transcript.is_empty() {
+        return "Nothing has been said yet. Suggest how the user could open the conversation."
+            .to_string();
+    }
+    let Some((speaker, text)) = last_utterance(transcript) else {
+        return "The speaker of the most recent line is unknown; judge from the transcript \
+                who is speaking."
+            .to_string();
+    };
+    let quote = head_chars(text, LATEST_LINE_QUOTE_CHARS);
+    match speaker {
+        Speaker::User => format!(
+            "Said by the USER (You): \"{}\". These are the user's own words: do not answer \
+             them or repeat them. If it was a question, the other participant has not \
+             answered yet, so suggest what the user could say once they reply.",
+            quote
+        ),
+        Speaker::Other => format!(
+            "Said by ANOTHER PARTICIPANT (Other): \"{}\". If it asks the user something, \
+             the reply must answer it on the user's behalf.",
+            quote
+        ),
+    }
+}
+
+/// Speaker and text of the last non-empty transcript line, when it carries a
+/// `You:` / `Other:` label (lines look like `[MM:SS] You: text`).
+fn last_utterance(transcript: &str) -> Option<(Speaker, &str)> {
+    let line = transcript.lines().rev().map(str::trim).find(|l| !l.is_empty())?;
+    let rest = line.split_once("] ").map_or(line, |(_, rest)| rest);
+    if let Some(text) = rest.strip_prefix("You:") {
+        return Some((Speaker::User, text.trim()));
+    }
+    if let Some(text) = rest.strip_prefix("Other:") {
+        return Some((Speaker::Other, text.trim()));
+    }
+    None
 }
 
 /// Read the model's JSON answer into a suggestion.
@@ -96,6 +155,34 @@ mod tests {
         let prompt = build_user_prompt("  ", "\n");
         assert!(prompt.contains("(none provided)"));
         assert!(prompt.contains("(nothing has been said yet)"));
+        assert!(prompt.contains("open the conversation"));
+    }
+
+    #[test]
+    fn latest_line_by_user_is_not_to_be_answered() {
+        let transcript = "[00:00] Other: Hi there\n[00:01] You: Hey, how are you? Good morning.\n";
+        let prompt = build_user_prompt("", transcript);
+        let latest = &prompt[prompt.find("Most recent line:").unwrap()..];
+        assert!(latest.contains("Said by the USER (You)"));
+        assert!(latest.contains("\"Hey, how are you? Good morning.\""));
+        assert!(latest.contains("do not answer"));
+        assert!(!latest.contains("ANOTHER PARTICIPANT"));
+    }
+
+    #[test]
+    fn latest_line_by_other_is_to_be_answered() {
+        let transcript = "[00:01] You: Hello\n\n[00:05] Other: Can you walk me through your last project?\n  \n";
+        let prompt = build_user_prompt("", transcript);
+        let latest = &prompt[prompt.find("Most recent line:").unwrap()..];
+        assert!(latest.contains("Said by ANOTHER PARTICIPANT (Other)"));
+        assert!(latest.contains("walk me through your last project?"));
+        assert!(!latest.contains("USER (You)"));
+    }
+
+    #[test]
+    fn latest_line_without_label_is_unknown() {
+        let prompt = build_user_prompt("", "[00:01] You: Hello\n[00:03] some unlabelled text");
+        assert!(prompt.contains("speaker of the most recent line is unknown"));
     }
 
     #[test]
