@@ -7,8 +7,9 @@ import {
   liveNotesService,
   type LiveNotes,
   type LiveNotesSettings,
-  type LiveNotesModelConfig,
 } from '@/services/liveNotesService';
+import { resolveSummaryModelConfig, type LlmModelConfig } from '@/services/modelConfig';
+import { formatTranscriptLine, type TranscriptLine } from '@/lib/transcriptText';
 
 /**
  * Drives the live-notes lifecycle from the main window. Reads recording
@@ -192,62 +193,24 @@ export function useLiveNotes(meetingId: string | null) {
   }, [isRecording, enabledForMeeting, meetingId, setLatest, setEnabledForMeeting, setStatus, setPanelMode]);
 }
 
-function buildRecentTranscriptText(
-  transcripts: Array<{ text: string; audio_start_time?: number; speaker?: string }>,
-  intervalMs: number
-): string {
+function buildRecentTranscriptText(transcripts: TranscriptLine[], intervalMs: number): string {
   const windowMs = Math.min(intervalMs * 3, 5 * 60 * 1000);
   const last = transcripts[transcripts.length - 1];
   if (!last || last.audio_start_time === undefined) {
-    return transcripts.map(formatLine).join('\n');
+    return transcripts.map(formatTranscriptLine).join('\n');
   }
   const cutoff = last.audio_start_time - windowMs / 1000;
   return transcripts
     .filter(t => (t.audio_start_time ?? 0) >= cutoff)
-    .map(formatLine)
+    .map(formatTranscriptLine)
     .join('\n');
 }
 
-function formatLine(t: { text: string; audio_start_time?: number; speaker?: string }): string {
-  const ts = formatStamp(t.audio_start_time ?? 0);
-  const who = t.speaker === 'me' ? 'You' : t.speaker === 'others' ? 'Other' : '';
-  return who ? `[${ts}] ${who}: ${t.text}` : `[${ts}] ${t.text}`;
-}
-
-function formatStamp(seconds: number): string {
-  const mm = Math.floor(seconds / 60).toString().padStart(2, '0');
-  const ss = Math.floor(seconds % 60).toString().padStart(2, '0');
-  return `${mm}:${ss}`;
-}
-
-async function resolveModelConfig(): Promise<LiveNotesModelConfig | null> {
+async function resolveModelConfig(): Promise<LlmModelConfig | null> {
   const s = await liveNotesService.getSettings();
   if (s.provider !== 'inherit') {
     if (!s.model) return null;
     return { provider: s.provider, model: s.model };
   }
-  const { invoke } = await import('@tauri-apps/api/core');
-  const config: any = await invoke('api_get_model_config').catch(() => null);
-  if (!config || !config.provider || !config.model) return null;
-
-  // For custom-openai the endpoint + API key + model live in a separate
-  // JSON row, not in api_get_model_config's response. Fetch it here so the
-  // inherit path can drive a custom OpenAI-compatible proxy.
-  if (config.provider === 'custom-openai') {
-    const custom: any = await invoke('api_get_custom_openai_config').catch(() => null);
-    if (!custom || !custom.endpoint || !custom.model) return null;
-    return {
-      provider: 'custom-openai',
-      model: custom.model,
-      api_key: custom.apiKey ?? undefined,
-      custom_openai_endpoint: custom.endpoint,
-    };
-  }
-
-  return {
-    provider: config.provider,
-    model: config.model,
-    api_key: config.apiKey ?? undefined,
-    ollama_endpoint: config.ollamaEndpoint ?? undefined,
-  };
+  return resolveSummaryModelConfig();
 }

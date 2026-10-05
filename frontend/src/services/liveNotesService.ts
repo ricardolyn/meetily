@@ -4,21 +4,14 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
-import { load, type Store } from '@tauri-apps/plugin-store';
+import { getAppStore } from '@/services/appStore';
+import type { LlmModelConfig } from '@/services/modelConfig';
 
 export interface LiveNotes {
   right_now: string;
   asked_of_you: string[];
   action_items: string[];
   generated_at: string;
-}
-
-export interface LiveNotesModelConfig {
-  provider: string;
-  model: string;
-  api_key?: string;
-  ollama_endpoint?: string;
-  custom_openai_endpoint?: string;
 }
 
 export interface LiveNotesSettings {
@@ -32,7 +25,6 @@ export interface LiveNotesSettings {
   model: string | null;
 }
 
-const STORE_FILE = 'store.json';
 const STORE_KEY = 'liveNotes';
 
 const DEFAULT_SETTINGS: LiveNotesSettings = {
@@ -42,27 +34,15 @@ const DEFAULT_SETTINGS: LiveNotesSettings = {
   model: null,
 };
 
-// Promise singleton so concurrent callers (React Strict Mode double-mount,
-// multiple settings components) all reuse the same load() call. The
-// `defaults: {}` is required by the plugin-store type definition even
-// though we hold defaults ourselves at the application layer.
-let storePromise: Promise<Store> | null = null;
-function getStore(): Promise<Store> {
-  if (storePromise === null) {
-    storePromise = load(STORE_FILE, { autoSave: true, defaults: {} });
-  }
-  return storePromise;
-}
-
 export const liveNotesService = {
   async getSettings(): Promise<LiveNotesSettings> {
-    const store = await getStore();
+    const store = await getAppStore();
     const stored = (await store.get<Partial<LiveNotesSettings>>(STORE_KEY)) ?? {};
     return { ...DEFAULT_SETTINGS, ...stored };
   },
 
   async setSettings(next: LiveNotesSettings): Promise<void> {
-    const store = await getStore();
+    const store = await getAppStore();
     await store.set(STORE_KEY, next);
     await store.save();
   },
@@ -71,7 +51,7 @@ export const liveNotesService = {
     meetingId: string,
     recentTranscripts: string,
     previousNotes: LiveNotes | null,
-    modelConfig: LiveNotesModelConfig
+    modelConfig: LlmModelConfig
   ): Promise<LiveNotes> {
     return invoke<LiveNotes>('api_generate_live_notes', {
       meetingId,

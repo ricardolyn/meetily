@@ -4,6 +4,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
+import type { LlmModelConfig } from '@/services/modelConfig';
 
 export type ChatRole = 'user' | 'assistant';
 
@@ -18,14 +19,6 @@ export interface ChatSession {
   messages: ChatMessage[];
 }
 
-export interface ChatModelConfig {
-  provider: string;
-  model: string;
-  api_key?: string;
-  ollama_endpoint?: string;
-  custom_openai_endpoint?: string;
-}
-
 export const chatService = {
   /** Answer a question using the whole-meeting transcript + prior turns. */
   ask(
@@ -33,7 +26,7 @@ export const chatService = {
     transcript: string,
     history: ChatMessage[],
     question: string,
-    modelConfig: ChatModelConfig
+    modelConfig: LlmModelConfig
   ): Promise<ChatMessage> {
     return invoke<ChatMessage>('api_ask_meeting', {
       meetingId,

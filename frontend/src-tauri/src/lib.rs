@@ -44,6 +44,7 @@ pub mod config;
 pub mod chat;
 pub mod console_utils;
 pub mod database;
+pub mod live_llm;
 pub mod live_notes;
 pub mod notifications;
 pub mod ollama;
@@ -410,6 +411,7 @@ pub fn run() {
                 // Live-notes path is chatty during a meeting; let it through.
                 .level_for("app_lib::live_notes", log::LevelFilter::Debug)
                 .level_for("app_lib::chat", log::LevelFilter::Debug)
+                .level_for("app_lib::live_llm", log::LevelFilter::Debug)
                 .targets([
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
                         file_name: Some("meetily".into()),

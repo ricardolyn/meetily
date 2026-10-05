@@ -3,7 +3,9 @@ import { listen } from '@tauri-apps/api/event';
 import { useTranscripts } from '@/contexts/TranscriptContext';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
 import { useChatContext } from '@/contexts/ChatContext';
-import { chatService, type ChatModelConfig } from '@/services/chatService';
+import { chatService } from '@/services/chatService';
+import { resolveSummaryModelConfig } from '@/services/modelConfig';
+import { buildTranscriptText } from '@/lib/transcriptText';
 
 /**
  * Drives the live-chat lifecycle from the main window. Exposes `ask()` to
@@ -61,14 +63,14 @@ export function useLiveChat(meetingId: string | null) {
       const trimmed = question.trim();
       if (!trimmed || inFlightRef.current || !meetingId) return;
 
-      const cfg = await resolveModelConfig();
+      const cfg = await resolveSummaryModelConfig();
       if (!cfg) {
         setStatus({ kind: 'error', message: 'No LLM provider configured' });
         return;
       }
 
       const history = messagesRef.current;
-      const transcript = buildFullTranscriptText(transcriptsRef.current);
+      const transcript = buildTranscriptText(transcriptsRef.current);
       const now = new Date().toISOString();
       appendMessage({ role: 'user', content: trimmed, timestamp: now });
 
@@ -90,48 +92,4 @@ export function useLiveChat(meetingId: string | null) {
   );
 
   return { ask };
-}
-
-function buildFullTranscriptText(
-  transcripts: Array<{ text: string; audio_start_time?: number; speaker?: string }>
-): string {
-  return transcripts.map(formatLine).join('\n');
-}
-
-function formatLine(t: { text: string; audio_start_time?: number; speaker?: string }): string {
-  const ts = formatStamp(t.audio_start_time ?? 0);
-  const who = t.speaker === 'me' ? 'You' : t.speaker === 'others' ? 'Other' : '';
-  return who ? `[${ts}] ${who}: ${t.text}` : `[${ts}] ${t.text}`;
-}
-
-function formatStamp(seconds: number): string {
-  const mm = Math.floor(seconds / 60).toString().padStart(2, '0');
-  const ss = Math.floor(seconds % 60).toString().padStart(2, '0');
-  return `${mm}:${ss}`;
-}
-
-async function resolveModelConfig(): Promise<ChatModelConfig | null> {
-  const { invoke } = await import('@tauri-apps/api/core');
-  const config: any = await invoke('api_get_model_config').catch(() => null);
-  if (!config || !config.provider || !config.model) return null;
-
-  // For custom-openai the endpoint + API key + model live in a separate JSON
-  // row, not in api_get_model_config's response.
-  if (config.provider === 'custom-openai') {
-    const custom: any = await invoke('api_get_custom_openai_config').catch(() => null);
-    if (!custom || !custom.endpoint || !custom.model) return null;
-    return {
-      provider: 'custom-openai',
-      model: custom.model,
-      api_key: custom.apiKey ?? undefined,
-      custom_openai_endpoint: custom.endpoint,
-    };
-  }
-
-  return {
-    provider: config.provider,
-    model: config.model,
-    api_key: config.apiKey ?? undefined,
-    ollama_endpoint: config.ollamaEndpoint ?? undefined,
-  };
 }

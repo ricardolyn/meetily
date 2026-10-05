@@ -80,12 +80,14 @@ impl LLMProvider {
     pub fn from_str(s: &str) -> Result<Self, String> {
         match s.to_lowercase().as_str() {
             "openai" => Ok(Self::OpenAI),
-            "claude" => Ok(Self::Claude),
+            "claude" | "anthropic" => Ok(Self::Claude),
             "groq" => Ok(Self::Groq),
             "ollama" => Ok(Self::Ollama),
             "openrouter" => Ok(Self::OpenRouter),
-            "builtin-ai" | "local-llama" | "localllama" => Ok(Self::BuiltInAI),
-            "custom-openai" => Ok(Self::CustomOpenAI),
+            "builtin-ai" | "builtin" | "builtinai" | "builtin_ai" | "local-llama" | "localllama" => {
+                Ok(Self::BuiltInAI)
+            }
+            "custom-openai" | "customopenai" | "custom_openai" => Ok(Self::CustomOpenAI),
             _ => Err(format!("Unsupported LLM provider: {}", s)),
         }
     }

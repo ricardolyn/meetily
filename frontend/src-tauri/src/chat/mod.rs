@@ -7,13 +7,12 @@
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
-use log::{error as log_error, info as log_info, warn as log_warn};
-use reqwest::Client;
+use log::info as log_info;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager as _, Runtime};
-use tokio::time::{timeout, Duration};
+use tauri::{AppHandle, Runtime};
+use tokio::time::Duration;
 
-use crate::summary::llm_client::{generate_summary, LLMProvider};
+use crate::live_llm::{run_prompt, LlmModelConfig, PromptRequest};
 
 /// Hard cap on a single chat LLM call. More generous than live notes because
 /// a chat answer carries the whole-meeting transcript in its prompt, so the
@@ -39,19 +38,6 @@ pub struct ChatSession {
     pub messages: Vec<ChatMessage>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct ChatModelConfig {
-    /// e.g. "ollama", "claude", "openai", "groq", "openrouter", "custom-openai".
-    pub provider: String,
-    pub model: String,
-    #[serde(default)]
-    pub api_key: Option<String>,
-    #[serde(default)]
-    pub ollama_endpoint: Option<String>,
-    #[serde(default)]
-    pub custom_openai_endpoint: Option<String>,
-}
-
 /// Answer a question about the ongoing meeting using the whole-meeting
 /// transcript plus the prior turns of this chat session as context. Returns
 /// the assistant's reply as a `ChatMessage`.
@@ -62,7 +48,7 @@ pub async fn api_ask_meeting<R: Runtime>(
     transcript: String,
     history: Vec<ChatMessage>,
     question: String,
-    model_config: ChatModelConfig,
+    model_config: LlmModelConfig,
 ) -> Result<ChatMessage, String> {
     log_info!(
         "api_ask_meeting called: meeting_id={}, transcript_chars={}, history_turns={}, question_chars={}, provider={}, model={}",
@@ -78,49 +64,20 @@ pub async fn api_ask_meeting<R: Runtime>(
         return Err("Question is empty".to_string());
     }
 
-    let provider = parse_provider(&model_config.provider)?;
-    let system_prompt = SYSTEM_PROMPT.to_string();
     let user_prompt = build_user_prompt(&transcript, &history, &question);
-
-    let app_data_dir = app.path().app_data_dir().ok();
-
-    let client = Client::new();
-    let call_future = generate_summary(
-        &client,
-        &provider,
-        &model_config.model,
-        model_config.api_key.as_deref().unwrap_or(""),
-        &system_prompt,
-        &user_prompt,
-        model_config.ollama_endpoint.as_deref(),
-        model_config.custom_openai_endpoint.as_deref(),
-        Some(800),
-        Some(0.3),
-        Some(0.9),
-        app_data_dir.as_ref(),
-        None,
-    );
-
-    log_info!(
-        "Chat: dispatching to {:?} (model={}, has_api_key={}, has_ollama_endpoint={}, prompt_chars={})",
-        provider,
-        model_config.model,
-        model_config.api_key.as_deref().map(|k| !k.is_empty()).unwrap_or(false),
-        model_config.ollama_endpoint.is_some(),
-        user_prompt.len(),
-    );
-
-    let raw = match timeout(LLM_CALL_TIMEOUT, call_future).await {
-        Ok(Ok(s)) => s,
-        Ok(Err(e)) => {
-            log_error!("Chat LLM call failed: {}", e);
-            return Err(format!("LLM call failed: {}", e));
-        }
-        Err(_) => {
-            log_warn!("Chat LLM call exceeded {:?}; aborting", LLM_CALL_TIMEOUT);
-            return Err("LLM call timed out".to_string());
-        }
-    };
+    let raw = run_prompt(
+        &app,
+        &model_config,
+        PromptRequest {
+            label: "Chat",
+            system_prompt: SYSTEM_PROMPT,
+            user_prompt: &user_prompt,
+            max_tokens: 800,
+            temperature: 0.3,
+            timeout: LLM_CALL_TIMEOUT,
+        },
+    )
+    .await?;
 
     let answer = raw.trim().to_string();
     if answer.is_empty() {
@@ -133,19 +90,6 @@ pub async fn api_ask_meeting<R: Runtime>(
         content: answer,
         timestamp: Utc::now(),
     })
-}
-
-fn parse_provider(name: &str) -> Result<LLMProvider, String> {
-    match name.to_lowercase().as_str() {
-        "ollama" => Ok(LLMProvider::Ollama),
-        "claude" | "anthropic" => Ok(LLMProvider::Claude),
-        "openai" => Ok(LLMProvider::OpenAI),
-        "groq" => Ok(LLMProvider::Groq),
-        "openrouter" => Ok(LLMProvider::OpenRouter),
-        "builtin" | "builtinai" | "builtin_ai" => Ok(LLMProvider::BuiltInAI),
-        "custom-openai" | "customopenai" | "custom_openai" => Ok(LLMProvider::CustomOpenAI),
-        other => Err(format!("Unsupported provider for chat: {}", other)),
-    }
 }
 
 const SYSTEM_PROMPT: &str =

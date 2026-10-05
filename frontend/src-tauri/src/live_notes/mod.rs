@@ -8,17 +8,15 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use log::{error as log_error, info as log_info, warn as log_warn};
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager as _, Runtime};
-use tokio::time::{timeout, Duration};
+use tokio::time::Duration;
 
-use crate::summary::llm_client::{generate_summary, LLMProvider};
+use crate::live_llm::output::{parse_json_object, string_array};
+use crate::live_llm::{run_prompt, LlmModelConfig, PromptRequest};
 
 /// Hard cap on a single LLM call. Prevents a stuck local model from
-/// queuing requests forever. Wraps the entire `generate_summary` future,
-/// so this also dominates the BuiltInAI provider's internal 15-minute
-/// timeout — the outer drop fires first.
+/// queuing requests forever.
 const LLM_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,26 +27,13 @@ pub struct LiveNotes {
     pub generated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct LiveNotesModelConfig {
-    /// e.g. "ollama", "claude", "openai", "groq", "openrouter", "custom-openai".
-    pub provider: String,
-    pub model: String,
-    #[serde(default)]
-    pub api_key: Option<String>,
-    #[serde(default)]
-    pub ollama_endpoint: Option<String>,
-    #[serde(default)]
-    pub custom_openai_endpoint: Option<String>,
-}
-
 #[tauri::command]
 pub async fn api_generate_live_notes<R: Runtime>(
     app: AppHandle<R>,
     meeting_id: String,
     recent_transcripts: String,
     previous_notes: Option<LiveNotes>,
-    model_config: LiveNotesModelConfig,
+    model_config: LlmModelConfig,
 ) -> Result<LiveNotes, String> {
     log_info!(
         "api_generate_live_notes called: meeting_id={}, transcripts_chars={}, provider={}, model={}, has_custom_endpoint={}",
@@ -63,56 +48,20 @@ pub async fn api_generate_live_notes<R: Runtime>(
         return Err("Recent transcripts are empty; nothing to summarize".to_string());
     }
 
-    let provider = parse_provider(&model_config.provider)?;
-    let system_prompt = SYSTEM_PROMPT.to_string();
     let user_prompt = build_user_prompt(&recent_transcripts, previous_notes.as_ref());
-
-    let app_data_dir = app.path().app_data_dir().ok();
-
-    let client = Client::new();
-    let call_future = generate_summary(
-        &client,
-        &provider,
-        &model_config.model,
-        model_config.api_key.as_deref().unwrap_or(""),
-        &system_prompt,
-        &user_prompt,
-        model_config.ollama_endpoint.as_deref(),
-        model_config.custom_openai_endpoint.as_deref(),
-        Some(700),
-        Some(0.2),
-        Some(0.9),
-        app_data_dir.as_ref(),
-        None,
-    );
-
-    log_info!(
-        "Live notes: dispatching to {:?} (model={}, has_api_key={}, has_ollama_endpoint={}, prompt_chars={})",
-        provider,
-        model_config.model,
-        model_config.api_key.as_deref().map(|k| !k.is_empty()).unwrap_or(false),
-        model_config.ollama_endpoint.is_some(),
-        user_prompt.len(),
-    );
-
-    let raw = match timeout(LLM_CALL_TIMEOUT, call_future).await {
-        Ok(Ok(s)) => {
-            log_info!(
-                "Live notes: LLM responded with {} chars. First 200: {}",
-                s.len(),
-                head_chars(&s, 200)
-            );
-            s
-        }
-        Ok(Err(e)) => {
-            log_error!("Live notes LLM call failed: {}", e);
-            return Err(format!("LLM call failed: {}", e));
-        }
-        Err(_) => {
-            log_warn!("Live notes LLM call exceeded {:?}; aborting", LLM_CALL_TIMEOUT);
-            return Err("LLM call timed out".to_string());
-        }
-    };
+    let raw = run_prompt(
+        &app,
+        &model_config,
+        PromptRequest {
+            label: "Live notes",
+            system_prompt: SYSTEM_PROMPT,
+            user_prompt: &user_prompt,
+            max_tokens: 700,
+            temperature: 0.2,
+            timeout: LLM_CALL_TIMEOUT,
+        },
+    )
+    .await?;
 
     match parse_llm_output(&raw) {
         Ok(notes) => {
@@ -128,19 +77,6 @@ pub async fn api_generate_live_notes<R: Runtime>(
             log_error!("Live notes: parse failed — {}. Full LLM output:\n{}", e, raw);
             Err(e)
         }
-    }
-}
-
-fn parse_provider(name: &str) -> Result<LLMProvider, String> {
-    match name.to_lowercase().as_str() {
-        "ollama" => Ok(LLMProvider::Ollama),
-        "claude" | "anthropic" => Ok(LLMProvider::Claude),
-        "openai" => Ok(LLMProvider::OpenAI),
-        "groq" => Ok(LLMProvider::Groq),
-        "openrouter" => Ok(LLMProvider::OpenRouter),
-        "builtin" | "builtinai" | "builtin_ai" => Ok(LLMProvider::BuiltInAI),
-        "custom-openai" | "customopenai" | "custom_openai" => Ok(LLMProvider::CustomOpenAI),
-        other => Err(format!("Unsupported provider for live notes: {}", other)),
     }
 }
 
@@ -180,114 +116,20 @@ fn build_user_prompt(recent_transcripts: &str, previous: Option<&LiveNotes>) -> 
 }
 
 fn parse_llm_output(raw: &str) -> Result<LiveNotes, String> {
-    let cleaned = raw
-        .trim()
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```")
-        .trim();
-
-    // Local models frequently emit prose preambles like "Here is the JSON
-    // object: { ... }" or trailing explanations. Fall back to extracting
-    // the largest balanced `{ ... }` block before giving up.
-    let parsed: serde_json::Value = match serde_json::from_str(cleaned) {
-        Ok(v) => v,
-        Err(_) => {
-            let json_slice = extract_json_object(cleaned).ok_or_else(|| {
-                format!(
-                    "LLM output contained no JSON object (raw: {})",
-                    head_chars(raw, 200)
-                )
-            })?;
-            serde_json::from_str(json_slice).map_err(|e| {
-                format!(
-                    "LLM output is not valid JSON: {} (raw: {})",
-                    e,
-                    head_chars(raw, 200)
-                )
-            })?
-        }
-    };
-
+    let parsed = parse_json_object(raw)?;
     let right_now = parsed
         .get("right_now")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .trim()
         .to_string();
-    let asked_of_you = parsed
-        .get("asked_of_you")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|s| s.as_str().map(|s| s.trim().to_string()))
-                .filter(|s| !s.is_empty())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let action_items = parsed
-        .get("action_items")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|s| s.as_str().map(|s| s.trim().to_string()))
-                .filter(|s| !s.is_empty())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
 
     Ok(LiveNotes {
         right_now,
-        asked_of_you,
-        action_items,
+        asked_of_you: string_array(&parsed, "asked_of_you"),
+        action_items: string_array(&parsed, "action_items"),
         generated_at: Utc::now(),
     })
-}
-
-/// Take at most `n` chars from `s` without slicing inside a multi-byte
-/// UTF-8 codepoint. `&s[..n]` panics if byte index `n` lands inside a
-/// codepoint (emoji, accented letter, CJK, etc.).
-fn head_chars(s: &str, n: usize) -> &str {
-    match s.char_indices().nth(n) {
-        Some((i, _)) => &s[..i],
-        None => s,
-    }
-}
-
-/// Find the first balanced `{ ... }` block in `s`, respecting nesting and
-/// double-quoted strings. Returns the slice including the braces.
-fn extract_json_object(s: &str) -> Option<&str> {
-    let bytes = s.as_bytes();
-    let start = bytes.iter().position(|&b| b == b'{')?;
-    let mut depth: i32 = 0;
-    let mut in_string = false;
-    let mut escape = false;
-    for (i, &b) in bytes.iter().enumerate().skip(start) {
-        if escape {
-            escape = false;
-            continue;
-        }
-        if in_string {
-            match b {
-                b'\\' => escape = true,
-                b'"' => in_string = false,
-                _ => {}
-            }
-            continue;
-        }
-        match b {
-            b'"' => in_string = true,
-            b'{' => depth += 1,
-            b'}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(&s[start..=i]);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 const LIVE_NOTES_FILENAME: &str = "live_notes.json";
