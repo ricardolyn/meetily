@@ -8,3 +8,9 @@
 # machine runs, and won't launch on older Macs.
 MACOSX_DEPLOYMENT_TARGET = { value = "14.2", force = true }
 CMAKE_OSX_DEPLOYMENT_TARGET = "14.2"
+
+# llama-helper only loads local models, so llama.cpp's HTTP helper needs no
+# HTTPS. Its vendored cpp-httplib doesn't compile against OpenSSL 4 (now
+# Homebrew's default); llama-cpp-sys-2 forwards CMAKE_* vars to CMake, and
+# this stops CMake from finding OpenSSL at all.
+CMAKE_DISABLE_FIND_PACKAGE_OpenSSL = "ON"
